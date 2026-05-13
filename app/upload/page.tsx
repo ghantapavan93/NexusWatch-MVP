@@ -263,24 +263,42 @@ export default function UploadPage() {
   }
 
   async function applyDetectedFields(source: "paste_text" | "pdf_text", detected: ParsedInvoiceText) {
-    if (detected.invoiceNumber) setInvoiceNumber(detected.invoiceNumber);
-    if (detected.invoiceDate) setInvoiceDate(detected.invoiceDate);
-    if (detected.dueDate) setDueDate(detected.dueDate);
-    if (detected.customerName) setCustomerName(detected.customerName);
-    if (detected.shipToState) setShipToState(detected.shipToState);
-    if (detected.billToState) setBillToState(detected.billToState);
-    if (detected.lineItems.length) {
+    const normalized = normalizeDetectedInvoice(detected);
+    const typedInvoiceNumber = invoiceNumber.trim();
+    const shouldUseDetectedInvoiceNumber =
+      Boolean(normalized.invoiceNumber) && (!typedInvoiceNumber || typedInvoiceNumber === "INV-1048-DRAFT");
+    const invoiceMismatch =
+      normalized.invoiceNumber &&
+      typedInvoiceNumber &&
+      typedInvoiceNumber !== "INV-1048-DRAFT" &&
+      normalized.invoiceNumber.toLowerCase() !== typedInvoiceNumber.toLowerCase();
+
+    if (shouldUseDetectedInvoiceNumber && normalized.invoiceNumber) setInvoiceNumber(normalized.invoiceNumber);
+    if (normalized.invoiceDate) setInvoiceDate(normalized.invoiceDate);
+    if (normalized.dueDate) setDueDate(normalized.dueDate);
+    if (normalized.customerName) setCustomerName(normalized.customerName);
+    if (normalized.shipToState) setShipToState(normalized.shipToState);
+    if (normalized.billToState) setBillToState(normalized.billToState);
+    if (normalized.lineItems.length) {
       setLineItems(
-        detected.lineItems.map((item, index) => ({
+        normalized.lineItems.map((item, index) => ({
           id: `detected-${Date.now()}-${index}`,
           description: item.description,
-          category: item.category === "unknown" ? "other" : item.category,
+          category: item.category,
           amount: String(item.amount),
         }))
       );
     }
-    setNotes("Detected fields applied for manual accounting review. Decision support only.");
-    setActionMessage("Detected fields applied. Please review before this invoice affects nexus totals.");
+    setNotes(() => {
+      const base = "Detected fields applied for manual accounting review. Decision support only.";
+      if (!invoiceMismatch) return base;
+      return `${base} PDF/OCR invoice number ${normalized.invoiceNumber} did not replace manually entered invoice number ${typedInvoiceNumber}.`;
+    });
+    setActionMessage(
+      invoiceMismatch
+        ? `Detected fields applied except invoice number. Detected ${normalized.invoiceNumber}, current form has ${typedInvoiceNumber}. Review required.`
+        : "Detected fields applied. Please review before this invoice affects nexus totals."
+    );
     setToastMessage("Detected fields applied for review.");
     setMode("manual");
 
@@ -292,9 +310,10 @@ export default function UploadPage() {
         action: "detected_fields_applied",
         metadata: {
           source,
-          invoice_number: detected.invoiceNumber ?? null,
-          field_count: countDetectedFields(detected),
-          warning_count: detected.warnings.length,
+          invoice_number: normalized.invoiceNumber ?? typedInvoiceNumber ?? null,
+          field_count: normalized.fieldCount,
+          warning_count: normalized.warnings.length + (invoiceMismatch ? 1 : 0),
+          invoice_number_mismatch: Boolean(invoiceMismatch),
         },
       }),
     }).catch(() => undefined);
@@ -898,6 +917,99 @@ function WarningList({ warnings }: { warnings: string[] }) {
 function parseAmount(value: string) {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+type DetectedRecord = ParsedInvoiceText & Record<string, unknown>;
+type DetectedLineRecord = Record<string, unknown>;
+
+function normalizeDetectedInvoice(detected: ParsedInvoiceText) {
+  const record = detected as DetectedRecord;
+  const rawLines = getArray(record, "lineItems", "line_items");
+  const lineItems = rawLines
+    .map((line) => normalizeDetectedLineItem(line as DetectedLineRecord))
+    .filter((line) => line.description || line.amount !== 0);
+  const warnings = getArray(record, "warnings").filter((warning): warning is string => typeof warning === "string");
+
+  const normalized = {
+    invoiceNumber: getString(record, "invoiceNumber", "invoice_number"),
+    invoiceDate: normalizeDetectedDate(getString(record, "invoiceDate", "invoice_date")),
+    dueDate: normalizeDetectedDate(getString(record, "dueDate", "due_date")),
+    customerName: getString(record, "customerName", "customer_name", "customer"),
+    billToState: normalizeStateCode(getString(record, "billToState", "bill_to_state")),
+    shipToState: normalizeStateCode(getString(record, "shipToState", "ship_to_state")),
+    lineItems,
+    warnings,
+  };
+
+  return {
+    ...normalized,
+    fieldCount: [
+      normalized.invoiceNumber,
+      normalized.invoiceDate,
+      normalized.dueDate,
+      normalized.customerName,
+      normalized.billToState,
+      normalized.shipToState,
+      lineItems.length ? lineItems : null,
+      getNumber(record, "totalAmount", "total_amount"),
+    ].filter(Boolean).length,
+  };
+}
+
+function normalizeDetectedLineItem(line: DetectedLineRecord) {
+  const rawCategory = getString(line, "category")?.toLowerCase();
+  const category =
+    rawCategory === "saas" || rawCategory === "hardware" || rawCategory === "services" || rawCategory === "other"
+      ? rawCategory
+      : "other";
+
+  return {
+    description: getString(line, "description", "line_description", "name") ?? "",
+    category: category as Category,
+    amount: getNumber(line, "amount", "line_amount", "lineAmount") ?? 0,
+  };
+}
+
+function getString(record: Record<string, unknown>, ...keys: string[]) {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  }
+  return undefined;
+}
+
+function getNumber(record: Record<string, unknown>, ...keys: string[]) {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string") {
+      const parsed = Number(value.replace(/[$,]/g, ""));
+      if (Number.isFinite(parsed)) return parsed;
+    }
+  }
+  return undefined;
+}
+
+function getArray(record: Record<string, unknown>, ...keys: string[]) {
+  for (const key of keys) {
+    const value = record[key];
+    if (Array.isArray(value)) return value;
+  }
+  return [];
+}
+
+function normalizeDetectedDate(value?: string) {
+  if (!value) return undefined;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toISOString().slice(0, 10);
+}
+
+function normalizeStateCode(value?: string) {
+  if (!value) return undefined;
+  const code = value.trim().toUpperCase();
+  return /^[A-Z]{2}$/.test(code) ? code : undefined;
 }
 
 function calculateExtractionConfidence(detected: ParsedInvoiceText) {
