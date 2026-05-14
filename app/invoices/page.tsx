@@ -1,4 +1,6 @@
-import { InvoiceTable } from "@/components/invoices/InvoiceTable";
+import Link from "next/link";
+import { Download, Upload } from "lucide-react";
+import { PremiumInvoiceTable } from "@/components/invoices/PremiumInvoiceTable";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { getNexusWatchData } from "@/lib/supabaseData";
 
@@ -11,9 +13,21 @@ export default async function InvoicesPage() {
     <>
       <PageHeader
         title="Invoices"
-        description="Review imported, pasted, and manually entered invoice activity by customer, state, status, and risk."
+        description="Monitor invoice activity, review status, and threshold impact across all states."
+        action={
+          <div className="flex flex-wrap items-center gap-2">
+            <Link className="secondary-button px-4 py-2" href="/exports">
+              <Download className="h-4 w-4" />
+              Export
+            </Link>
+            <Link className="primary-button px-4 py-2" href="/upload">
+              <Upload className="h-4 w-4" />
+              Upload Invoice
+            </Link>
+          </div>
+        }
       />
-      <InvoiceTable invoices={[...invoices].sort((a, b) => b.invoiceDate.localeCompare(a.invoiceDate))} />
+      <PremiumInvoiceTable invoices={[...invoices].sort((a, b) => b.invoiceDate.localeCompare(a.invoiceDate))} />
     </>
   );
 }

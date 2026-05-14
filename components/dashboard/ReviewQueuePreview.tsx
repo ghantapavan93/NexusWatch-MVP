@@ -4,11 +4,14 @@ import type { Invoice } from "@/types";
 
 export function ReviewQueuePreview({ invoices }: { invoices: Invoice[] }) {
   return (
-    <div className="surface rounded-lg p-5">
-      <h2 className="text-sm font-semibold text-slate-950">Invoices Needing Review</h2>
+    <div className="premium-card p-5">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-bold text-slate-950">Invoices Needing Review</h2>
+        <Link href="/review" className="text-xs font-bold text-blue-700 hover:text-blue-800">View queue →</Link>
+      </div>
       <div className="mt-4 space-y-3">
         {invoices.slice(0, 5).map((invoice) => (
-          <Link key={invoice.id} href={`/invoices/${invoice.id}`} className="flex items-center justify-between gap-4 rounded-md border border-slate-100 p-3 transition hover:bg-slate-50">
+          <Link key={invoice.id} href={`/invoices/${invoice.id}`} className="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white p-3 transition hover:bg-blue-50/40">
             <div>
               <div className="text-sm font-medium text-slate-900">{invoice.invoiceNumber}</div>
               <div className="text-xs text-slate-500">{invoice.customerName}</div>
@@ -21,7 +24,7 @@ export function ReviewQueuePreview({ invoices }: { invoices: Invoice[] }) {
           </Link>
         ))}
         {invoices.length === 0 ? (
-          <div className="rounded-md border border-slate-100 p-4 text-sm text-slate-500">No invoices currently need review.</div>
+          <div className="rounded-xl border border-slate-100 bg-white p-4 text-sm text-slate-500">No invoices currently need review.</div>
         ) : null}
       </div>
     </div>

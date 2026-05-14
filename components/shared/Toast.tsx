@@ -19,9 +19,11 @@ export function Toast({
   if (!message) return null;
 
   return (
-    <div className="fixed bottom-5 right-5 z-50 max-w-sm rounded-lg border border-emerald-200 bg-white p-4 text-sm text-slate-700 shadow-lg">
+    <div className="fixed bottom-5 right-5 z-50 max-w-sm rounded-2xl border border-emerald-200 bg-white/95 p-4 text-sm text-slate-700 shadow-2xl shadow-slate-900/15 backdrop-blur">
       <div className="flex gap-3">
-        <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" />
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-50 text-emerald-600 ring-1 ring-emerald-100">
+          <CheckCircle2 className="h-4 w-4" />
+        </span>
         <div>
           <div className="font-semibold text-slate-950">Saved to database</div>
           <div className="mt-1 leading-5">{message}</div>

@@ -75,7 +75,7 @@ export function InvoiceTable({ invoices }: { invoices: Invoice[] }) {
         <SummaryCard label="Export Ready" value={summary.exportReady} detail="Approved with required fields" />
       </section>
 
-      <section className="surface rounded-lg p-4">
+      <section className="premium-card p-4">
         <div className="grid gap-3 lg:grid-cols-[minmax(240px,1fr)_repeat(4,180px)_160px]">
           <label className="text-xs font-medium uppercase text-slate-500">
             Search
@@ -105,14 +105,14 @@ export function InvoiceTable({ invoices }: { invoices: Invoice[] }) {
         </p>
       </section>
 
-      <section className="surface overflow-hidden rounded-lg">
+      <section className="data-grid">
         <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
           <div>
             <h2 className="text-sm font-semibold text-slate-950">Invoice Activity</h2>
             <p className="mt-1 text-xs text-slate-500">{filteredInvoices.length} invoices shown from local demo data.</p>
           </div>
           <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 ring-1 ring-blue-200">
-            No Supabase yet
+            Live data
           </span>
         </div>
         <div className="overflow-x-auto">
@@ -168,8 +168,8 @@ export function InvoiceTable({ invoices }: { invoices: Invoice[] }) {
                       <Link
                         className={`inline-flex rounded-md px-3 py-2 text-sm font-medium shadow-sm ${
                           isHero
-                            ? "bg-slate-900 text-white hover:bg-slate-800"
-                            : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                            ? "primary-button px-3 py-2"
+                            : "secondary-button px-3 py-2"
                         }`}
                         href={`/invoices/${invoice.id}`}
                       >
@@ -192,9 +192,9 @@ export function InvoiceTable({ invoices }: { invoices: Invoice[] }) {
 
 function SummaryCard({ label, value, detail }: { label: string; value: number; detail: string }) {
   return (
-    <div className="surface rounded-lg p-4">
-      <div className="text-xs font-medium uppercase text-slate-500">{label}</div>
-      <div className="mt-2 text-2xl font-semibold text-slate-950">{value}</div>
+    <div className="premium-card p-4">
+      <div className="text-xs font-bold uppercase tracking-wide text-slate-500">{label}</div>
+      <div className="mt-2 text-2xl font-bold text-slate-950">{value}</div>
       <div className="mt-1 text-xs text-slate-500">{detail}</div>
     </div>
   );

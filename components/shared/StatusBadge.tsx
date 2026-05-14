@@ -3,12 +3,12 @@ import type { InvoiceStatus, ReviewFlag, ThresholdStatus } from "@/types";
 const statusStyles: Record<string, string> = {
   safe: "bg-emerald-50 text-emerald-700 ring-emerald-200",
   healthy: "bg-emerald-50 text-emerald-700 ring-emerald-200",
-  watch: "bg-yellow-50 text-yellow-700 ring-yellow-200",
+  watch: "bg-amber-50 text-amber-700 ring-amber-200",
   warning: "bg-orange-50 text-orange-700 ring-orange-200",
   crossed: "bg-red-50 text-red-700 ring-red-200",
   needs_review: "bg-blue-50 text-blue-700 ring-blue-200",
   review_needed: "bg-blue-50 text-blue-700 ring-blue-200",
-  accounting_review: "bg-blue-50 text-blue-700 ring-blue-200",
+  accounting_review: "bg-indigo-50 text-indigo-700 ring-indigo-200",
   draft: "bg-slate-100 text-slate-700 ring-slate-200",
   open: "bg-blue-50 text-blue-700 ring-blue-200",
   reviewed: "bg-emerald-50 text-emerald-700 ring-emerald-200",
@@ -54,7 +54,7 @@ const labels: Record<string, string> = {
 
 export function StatusBadge({ status }: { status: ThresholdStatus | InvoiceStatus | ReviewFlag | "needs_review" | string }) {
   return (
-    <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset ${statusStyles[status] ?? "bg-slate-100 text-slate-700 ring-slate-200"}`}>
+    <span className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-bold ring-1 ring-inset ${statusStyles[status] ?? "bg-slate-100 text-slate-700 ring-slate-200"}`}>
       {labels[status] ?? status}
     </span>
   );

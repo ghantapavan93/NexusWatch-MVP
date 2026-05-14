@@ -340,7 +340,14 @@ export default function UploadPage() {
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_390px]">
         <div className="space-y-6">
-          <section className="surface rounded-lg p-5">
+          <section className="premium-card overflow-hidden p-0">
+            <div className="grid border-b border-slate-200 md:grid-cols-4">
+              <StepItem active number="1" title="Intake Method" detail="Choose how to add" />
+              <StepItem number="2" title="Invoice Details" detail="Review detected data" />
+              <StepItem number="3" title="Line Items" detail="Review categories" />
+              <StepItem number="4" title="Review & Submit" detail="Preview impact" />
+            </div>
+            <div className="p-5">
             <div className="grid gap-3 md:grid-cols-3">
               <IntakeOption
                 active={mode === "pdf"}
@@ -366,7 +373,7 @@ export default function UploadPage() {
             </div>
 
             {mode === "pdf" ? (
-              <div className="mt-5 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6">
+              <div className="mt-5 rounded-2xl border border-dashed border-blue-200 bg-gradient-to-br from-white to-blue-50/50 p-6">
                 <label className="block text-sm font-semibold text-slate-900">
                   PDF invoice
                   <input
@@ -391,7 +398,7 @@ export default function UploadPage() {
                     type="button"
                     disabled={isUploadingPdf || !pdfFile}
                     onClick={uploadPdf}
-                    className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                    className="primary-button px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                   >
                     <Upload className="h-4 w-4" />
                     {isUploadingPdf ? "Uploading..." : "Upload PDF"}
@@ -407,13 +414,13 @@ export default function UploadPage() {
                     Open uploaded PDF
                   </a>
                 ) : null}
-                <p className="mt-4 rounded-md bg-blue-50 p-3 text-sm leading-6 text-blue-800">
+                <p className="mt-4 rounded-xl bg-blue-50 p-3 text-sm leading-6 text-blue-800">
                   PDF uploaded and linked. NexusWatch checks embedded PDF text first, then uses OCR for scanned PDFs when possible. Manual review remains required.
                 </p>
                 {uploadedPdf?.detectedFields ? (
                   <ExtractedFieldsPreview
                     detected={uploadedPdf.detectedFields}
-                    sourceLabel="PDF text"
+                    sourceLabel={uploadedPdf.extractionStatus === "ocr_needs_review" ? "PDF or OCR" : "PDF text"}
                     extraWarnings={detectedMismatchWarning ? [detectedMismatchWarning] : []}
                     onUse={() => applyDetectedFields("pdf_text", uploadedPdf.detectedFields!)}
                   />
@@ -441,9 +448,10 @@ export default function UploadPage() {
                 ) : null}
               </>
             ) : null}
+            </div>
           </section>
 
-          <section className="surface rounded-lg p-5">
+          <section className="premium-card p-5">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-semibold text-slate-950">Manual Entry</h2>
               {missingShipTo ? <StatusBadge status="needs_review" /> : <StatusBadge status={impact?.after.status ?? "safe"} />}
@@ -467,7 +475,7 @@ export default function UploadPage() {
             </div>
           </section>
 
-          <section className="surface rounded-lg p-5">
+          <section className="premium-card p-5">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <h2 className="text-sm font-semibold text-slate-950">Line Items</h2>
@@ -478,14 +486,14 @@ export default function UploadPage() {
               <button
                 type="button"
                 onClick={addLineItem}
-                className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+                className="inline-flex items-center justify-center gap-2 secondary-button px-3 py-2 text-sm"
               >
                 <Plus className="h-4 w-4" />
                 Add row
               </button>
             </div>
 
-            <div className="mt-5 overflow-hidden rounded-lg border border-slate-200">
+            <div className="mt-5 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
               <div className="hidden grid-cols-[1fr_210px_160px_52px] gap-3 bg-slate-50 px-4 py-3 text-xs font-semibold uppercase text-slate-500 md:grid">
                 <div>Description</div>
                 <div>Category</div>
@@ -538,7 +546,7 @@ export default function UploadPage() {
             </div>
           </section>
 
-          <section className="surface rounded-lg p-5">
+          <section className="premium-card p-5">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-sm text-slate-500">{actionMessage}</p>
               <div className="grid gap-3 sm:grid-cols-3">
@@ -546,14 +554,14 @@ export default function UploadPage() {
                   type="button"
                   disabled={isSaving}
                   onClick={() => saveInvoice("draft", "draft")}
-                  className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="secondary-button px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   Save Draft
                 </button>
                 <button
                   type="button"
                   onClick={() => setActionMessage("Impact preview refreshed from local demo rules.")}
-                  className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-slate-800"
+                  className="primary-button px-3 py-2 text-sm"
                 >
                   Preview Impact
                 </button>
@@ -561,7 +569,7 @@ export default function UploadPage() {
                   type="button"
                   disabled={isSaving}
                   onClick={() => saveInvoice("open", "needs_review")}
-                  className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-700 px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="primary-button px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <Send className="h-4 w-4" />
                   Send to Review Queue
@@ -572,9 +580,9 @@ export default function UploadPage() {
         </div>
 
         <aside className="space-y-6 xl:sticky xl:top-24 xl:self-start">
-          <section className="surface rounded-lg p-5">
+          <section className="premium-card p-5">
             <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-slate-950">Impact Preview</h2>
+              <h2 className="text-sm font-bold text-slate-950">Impact Preview</h2>
               {missingShipTo ? <StatusBadge status="needs_review" /> : <StatusBadge status={impact?.after.status ?? "safe"} />}
             </div>
 
@@ -626,7 +634,7 @@ export default function UploadPage() {
             )}
           </section>
 
-          <section className="surface rounded-lg p-5">
+          <section className="premium-card p-5">
             <h2 className="text-sm font-semibold text-slate-950">MVP Guardrails</h2>
             <p className="mt-3 text-sm leading-6 text-slate-600">
               Decision support only. Final tax treatment should be reviewed with accounting. NexusWatch does not make legal, filing, or registration claims.
@@ -655,16 +663,30 @@ function IntakeOption({
     <button
       type="button"
       onClick={onClick}
-      className={`rounded-lg border p-4 text-left transition ${
-        active ? "border-slate-900 bg-slate-900 text-white" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+      className={`relative rounded-xl border p-4 text-left transition ${
+        active ? "border-blue-500 bg-blue-50 text-slate-950 shadow-sm ring-1 ring-blue-200" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
       }`}
     >
       <div className="flex items-center gap-3">
-        {icon}
+        <span className={`flex h-9 w-9 items-center justify-center rounded-lg ${active ? "bg-blue-600 text-white" : "bg-slate-50 text-slate-500"}`}>{icon}</span>
         <div className="font-semibold">{title}</div>
       </div>
-      <p className={`mt-2 text-sm leading-5 ${active ? "text-slate-300" : "text-slate-500"}`}>{description}</p>
+      <p className="mt-2 text-sm leading-5 text-slate-500">{description}</p>
     </button>
+  );
+}
+
+function StepItem({ number, title, detail, active = false }: { number: string; title: string; detail: string; active?: boolean }) {
+  return (
+    <div className={`flex items-center gap-3 border-b-2 px-5 py-4 ${active ? "border-blue-600 bg-blue-50/50" : "border-transparent"}`}>
+      <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-bold ${active ? "bg-blue-700 text-white" : "bg-white text-slate-500 ring-1 ring-slate-200"}`}>
+        {number}
+      </span>
+      <div>
+        <div className="text-sm font-bold text-slate-950">{title}</div>
+        <div className="text-xs text-slate-500">{detail}</div>
+      </div>
+    </div>
   );
 }
 
@@ -724,7 +746,7 @@ function StateSelect({
 
 function TotalBox({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+    <div className="rounded-xl border border-slate-200 bg-gradient-to-br from-slate-50 to-white p-4 shadow-sm">
       <div className="text-xs font-medium uppercase text-slate-500">{label}</div>
       <div className="mt-2 text-xl font-semibold text-slate-950">{value}</div>
     </div>
@@ -815,15 +837,15 @@ function ExtractedFieldsPreview({
         <DetectedField label="Currency" value={detected.currency} confidence="medium" />
       </div>
 
-      <div className="mt-4 overflow-hidden rounded-lg border border-slate-200 bg-white">
-        <div className="grid grid-cols-[1fr_130px_130px] bg-slate-50 px-3 py-2 text-xs font-semibold uppercase text-slate-500">
+      <div className="mt-4 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+        <div className="grid gap-3 bg-slate-50 px-3 py-2 text-xs font-semibold uppercase text-slate-500 md:grid-cols-[1fr_130px_130px]">
           <div>Line item</div>
-          <div>Category</div>
-          <div className="text-right">Amount</div>
+          <div className="hidden md:block">Category</div>
+          <div className="hidden text-right md:block">Amount</div>
         </div>
         {detected.lineItems.length ? (
           detected.lineItems.map((item, index) => (
-            <div key={`${item.description}-${index}`} className="grid grid-cols-[1fr_130px_130px] gap-3 border-t border-slate-100 px-3 py-3 text-sm">
+            <div key={`${item.description}-${index}`} className="grid gap-3 border-t border-slate-100 px-3 py-3 text-sm md:grid-cols-[1fr_130px_130px]">
               <div>
                 <div className="font-medium text-slate-900">{item.description}</div>
                 <div className="mt-1 text-xs text-slate-500">{item.taxabilityReason}</div>
@@ -839,7 +861,7 @@ function ExtractedFieldsPreview({
                   {item.category === "unknown" ? "Unknown" : item.category}
                 </span>
               </div>
-              <div className="text-right font-medium text-slate-900">{formatCurrency(item.amount)}</div>
+              <div className="font-medium text-slate-900 md:text-right">{formatCurrency(item.amount)}</div>
             </div>
           ))
         ) : (
@@ -848,7 +870,7 @@ function ExtractedFieldsPreview({
       </div>
 
       {detected.missingFields.length ? (
-        <div className="mt-4 rounded-md bg-white p-3 text-sm text-slate-600">
+        <div className="mt-4 rounded-xl bg-white p-3 text-sm text-slate-600 ring-1 ring-slate-200">
           <span className="font-medium text-slate-900">Missing fields: </span>
           {detected.missingFields.join(", ")}
         </div>
@@ -861,7 +883,7 @@ function ExtractedFieldsPreview({
 
 function DetectionMetric({ label, value, detail }: { label: string; value: string | number; detail: string }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-3">
+    <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
       <div className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{label}</div>
       <div className="mt-1 text-xl font-semibold text-slate-950">{value}</div>
       <div className="mt-1 text-xs text-slate-500">{detail}</div>
@@ -879,7 +901,7 @@ function DetectedField({
   confidence?: unknown;
 }) {
   return (
-    <div className="rounded-md border border-slate-200 bg-white p-3">
+    <div className="rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
       <div className="flex items-center justify-between gap-2">
         <div className="text-xs font-medium uppercase text-slate-500">{label}</div>
         <ConfidencePill value={confidence} />
@@ -1031,3 +1053,4 @@ function countDetectedFields(detected: ParsedInvoiceText) {
     detected.lineItems.length ? detected.lineItems : null,
   ].filter(Boolean).length;
 }
+

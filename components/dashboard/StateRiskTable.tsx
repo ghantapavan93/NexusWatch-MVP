@@ -7,7 +7,7 @@ export function StateRiskTable({ states, invoices, rules }: { states: StateNexus
   const exposureByState = new Map(rules.map((rule) => [rule.stateCode, buildStateExposureDetails(rule, invoices)]));
 
   return (
-    <div className="surface overflow-hidden rounded-lg">
+    <div className="data-grid">
       <div className="border-b border-slate-200 px-5 py-4">
         <h2 className="text-sm font-semibold text-slate-950">State Nexus Monitor</h2>
       </div>
@@ -29,6 +29,14 @@ export function StateRiskTable({ states, invoices, rules }: { states: StateNexus
             {states.map((state) => {
               const exposure = exposureByState.get(state.stateCode);
               const reviewCount = (exposure?.reviewCount ?? 0) + (exposure?.accountingCount ?? 0);
+              const barColor =
+                state.status === "crossed"
+                  ? "bg-red-500"
+                  : state.status === "warning"
+                    ? "bg-orange-500"
+                    : state.status === "watch"
+                      ? "bg-amber-500"
+                      : "bg-emerald-500";
 
               return (
                 <tr key={state.stateCode}>
@@ -38,7 +46,7 @@ export function StateRiskTable({ states, invoices, rules }: { states: StateNexus
                   <td className="px-5 py-4">
                     <div className="min-w-48">
                       <div className="relative h-2.5 overflow-hidden rounded-full bg-slate-100">
-                        <div className="h-full rounded-full bg-slate-900" style={{ width: `${Math.min(state.percentUsed, 100)}%` }} />
+                        <div className={`h-full rounded-full ${barColor}`} style={{ width: `${Math.min(state.percentUsed, 100)}%` }} />
                         <div className="absolute left-[75%] top-0 h-full w-px bg-yellow-600/70" />
                         <div className="absolute left-[90%] top-0 h-full w-px bg-orange-700/80" />
                       </div>

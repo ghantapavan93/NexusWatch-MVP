@@ -29,7 +29,7 @@ export function RulesTable({ rules }: { rules: NexusRule[] }) {
   }, [categoryFilter, rules, search]);
 
   return (
-    <div className="surface overflow-hidden rounded-lg">
+    <div className="data-grid">
       <div className="border-b border-slate-200 p-4">
         <div className="grid gap-3 md:grid-cols-[1fr_240px]">
           <label className="text-xs font-medium uppercase text-slate-500">

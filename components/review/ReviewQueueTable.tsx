@@ -98,7 +98,7 @@ export function ReviewQueueTable({
   return (
     <>
       <Toast message={toastMessage} onClose={() => setToastMessage("")} />
-      <div className="surface overflow-hidden rounded-lg">
+      <div className="data-grid">
         <div className="border-b border-slate-200 p-4">
           <div className="flex flex-wrap gap-2">
             {tabs.map((tab) => (
@@ -108,7 +108,7 @@ export function ReviewQueueTable({
                 onClick={() => setActiveTab(tab.id)}
                 className={`rounded-md px-3 py-2 text-sm font-medium transition ${
                   activeTab === tab.id
-                    ? "bg-slate-900 text-white shadow-sm"
+                    ? "bg-slate-950 text-white shadow-sm"
                     : "bg-white text-slate-600 ring-1 ring-slate-200 hover:bg-slate-50"
                 }`}
               >
@@ -132,7 +132,7 @@ export function ReviewQueueTable({
             const recommendedActions = getRecommendedActions(invoice, impact);
 
             return (
-              <article key={invoice.id} className="p-5 transition hover:bg-slate-50">
+              <article key={invoice.id} className="p-5 transition hover:bg-blue-50/30">
                 <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
                   <div>
                     <div className="flex flex-wrap items-center gap-2">
@@ -175,7 +175,7 @@ export function ReviewQueueTable({
                       )}
                     </div>
                   </div>
-                  <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                  <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-4">
                     <div className="text-xs font-medium uppercase text-slate-500">Recommended next action</div>
                     <div className="mt-2 text-sm font-semibold text-slate-950">{impact.recommendedNextAction}</div>
                     <div className="mt-4 flex flex-wrap gap-2">
@@ -188,7 +188,7 @@ export function ReviewQueueTable({
                     <div className="mt-4 grid gap-2">
                       <Link
                         href={`/invoices/${invoice.id}`}
-                        className="inline-flex items-center justify-center rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-slate-800"
+                        className="primary-button px-3 py-2 text-sm"
                       >
                         Open invoice review
                       </Link>
@@ -197,7 +197,7 @@ export function ReviewQueueTable({
                           href={invoice.pdfPublicUrl}
                           target="_blank"
                           rel="noreferrer"
-                          className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+                          className="secondary-button px-3 py-2 text-sm"
                         >
                           <FileText className="h-4 w-4" />
                           Open source document

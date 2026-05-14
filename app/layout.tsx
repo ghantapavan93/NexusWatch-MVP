@@ -17,7 +17,7 @@ export default function RootLayout({ children }: Readonly<{ children: ReactNode 
           <AppSidebar />
           <div className="min-w-0 flex-1">
             <TopBar />
-            <main className="px-5 py-6 lg:px-8">{children}</main>
+            <main className="px-5 py-7 lg:px-8 xl:px-10">{children}</main>
           </div>
         </div>
       </body>

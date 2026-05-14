@@ -5,8 +5,11 @@ import type { Invoice } from "@/types";
 
 export function RecentInvoices({ invoices }: { invoices: Invoice[] }) {
   return (
-    <div className="surface rounded-lg p-5">
-      <h2 className="text-sm font-semibold text-slate-950">Recent Invoices</h2>
+    <div className="premium-card p-5">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-bold text-slate-950">Recent Invoices</h2>
+        <Link href="/invoices" className="text-xs font-bold text-blue-700 hover:text-blue-800">View all →</Link>
+      </div>
       <div className="mt-4 divide-y divide-slate-100">
         {invoices.slice(0, 6).map((invoice) => (
           <div key={invoice.id} className="grid grid-cols-2 gap-3 py-3 text-sm md:grid-cols-5">

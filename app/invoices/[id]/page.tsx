@@ -42,14 +42,14 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
           <div className="flex flex-wrap gap-2">
             <Link
               href="/dashboard"
-              className="inline-flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50"
+              className="inline-flex items-center gap-2 secondary-button px-3 py-2 text-sm"
             >
               <ArrowLeft className="h-4 w-4" />
               Back to Dashboard
             </Link>
             <Link
               href="/review"
-              className="inline-flex items-center rounded-md bg-blue-700 px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-800"
+              className="inline-flex items-center primary-button px-3 py-2 text-sm"
             >
               Review Queue
             </Link>
@@ -57,7 +57,7 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
         }
       />
 
-      <section className="surface overflow-hidden rounded-lg">
+      <section className="data-grid">
         <div className="border-b border-slate-200 bg-white px-5 py-5">
           <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
             <div>
@@ -70,7 +70,7 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
               </div>
               <h2 className="mt-4 text-2xl font-semibold text-slate-950">{invoice.customerName}</h2>
               <p className="mt-1 text-sm text-slate-500">
-                Hero demo invoice for Texas nexus visibility and accounting review workflow.
+                Case file for configured threshold impact, source document review, and accounting workflow.
               </p>
             </div>
             <div className="grid gap-3 sm:grid-cols-3 xl:w-[520px]">
@@ -93,7 +93,7 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1fr)_390px]">
         <div className="space-y-6">
-          <section className="surface rounded-lg p-5">
+          <section className="premium-card p-5">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <h2 className="text-sm font-semibold text-slate-950">Line Items</h2>
@@ -149,7 +149,7 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
             </div>
           </section>
 
-          <section className="surface rounded-lg p-5">
+          <section className="premium-card p-5">
             <h2 className="text-sm font-semibold text-slate-950">Review Flags</h2>
             <div className="mt-4 flex flex-wrap gap-2">
               <StatusBadge status="may_cross_threshold" />
@@ -159,11 +159,11 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
               </span>
             </div>
             <p className="mt-4 text-sm leading-6 text-slate-600">
-              This invoice includes SaaS and hardware line items counted by the configured Texas demo rule, plus services excluded from the threshold calculation.
+              This invoice is evaluated against the configured {rule.stateName} demo rule. Mixed taxable and excluded line items remain review based until approved.
             </p>
           </section>
 
-          <section className="surface rounded-lg p-5">
+          <section className="premium-card p-5">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <h2 className="text-sm font-semibold text-slate-950">Threshold Impact</h2>
@@ -207,7 +207,7 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
                   <Metric label="Impact Delta" value={formatCurrency(thresholdImpact.invoiceImpactDelta)} />
                 </div>
               </div>
-              <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <div className="rounded-xl border border-slate-200 bg-gradient-to-br from-slate-50 to-white p-4 shadow-sm">
                 <div className="text-xs font-medium uppercase text-slate-500">Recommended next action</div>
                 <div className="mt-2 text-sm font-semibold text-slate-950">{thresholdImpact.recommendedNextAction}</div>
                 <div className="mt-4 space-y-2">
@@ -218,7 +218,7 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
               </div>
             </div>
             <div className="mt-5 grid gap-4 lg:grid-cols-2">
-              <div className="rounded-lg border border-slate-200 p-4">
+              <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                 <div className="text-xs font-medium uppercase text-slate-500">State rule used</div>
                 <div className="mt-2 text-sm font-semibold text-slate-950">{thresholdImpact.stateRuleUsed}</div>
                 <div className="mt-3 text-sm text-slate-600">
@@ -228,7 +228,7 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
                   Excluded: {thresholdImpact.excludedCategories.join(", ") || "None detected"}
                 </div>
               </div>
-              <div className="rounded-lg border border-slate-200 p-4">
+              <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
                 <div className="text-xs font-medium uppercase text-slate-500">Risk reasons</div>
                 <div className="mt-3 flex flex-wrap gap-2">
                   {thresholdImpact.riskReasons.length ? (
@@ -259,14 +259,14 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
         </div>
 
         <aside className="space-y-6">
-          <section className="surface rounded-lg p-5">
+          <section className="premium-card p-5">
             <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-slate-950">Texas Impact</h2>
+              <h2 className="text-sm font-semibold text-slate-950">{rule.stateName} Impact</h2>
               <StatusBadge status={impact.after.status} />
             </div>
             <div className="mt-5 space-y-4 text-sm">
-              <ImpactRow label="Texas current taxable total" value={formatCurrency(currentTaxableTotal)} />
-              <ImpactRow label="Texas threshold" value={formatCurrency(rule.thresholdAmount)} />
+              <ImpactRow label={`${rule.stateName} current taxable total`} value={formatCurrency(currentTaxableTotal)} />
+              <ImpactRow label={`${rule.stateName} threshold`} value={formatCurrency(rule.thresholdAmount)} />
               <ImpactRow label="Percent before invoice" value={formatPercent(impact.before.percent)} />
               <ImpactRow label="Invoice taxable amount" value={formatCurrency(invoice.taxableAmount)} />
               <ImpactRow label="Percent after invoice" value={formatPercent(impact.after.percent)} />
@@ -280,7 +280,7 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
                   <div className="h-full rounded-full bg-orange-500" style={{ width: `${Math.min(impact.before.percent, 100)}%` }} />
                 </div>
                 <div className="mb-2 mt-4 flex justify-between text-xs font-medium text-slate-500">
-                  <span>After INV-1048</span>
+                  <span>After {invoice.invoiceNumber}</span>
                   <span>{formatPercent(impact.after.percent)}</span>
                 </div>
                 <div className="h-2 overflow-hidden rounded-full bg-slate-100">
@@ -291,7 +291,7 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
           </section>
 
           {invoice.pdfFileName || invoice.pdfPublicUrl ? (
-            <section className="surface rounded-lg p-5">
+            <section className="premium-card p-5">
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-3">
                   <div className="rounded-md bg-blue-50 p-2 text-blue-700 ring-1 ring-blue-100">
@@ -357,7 +357,7 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
                   href={invoice.pdfPublicUrl}
                   target="_blank"
                   rel="noreferrer"
-                  className="mt-4 inline-flex w-full items-center justify-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-slate-800"
+                  className="mt-4 inline-flex w-full items-center justify-center gap-2 primary-button px-3 py-2 text-sm"
                 >
                   <ExternalLink className="h-4 w-4" />
                   Open PDF
@@ -366,13 +366,13 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
             </section>
           ) : null}
           {!invoice.pdfFileName && !invoice.pdfPublicUrl ? (
-            <section className="surface rounded-lg p-5">
+            <section className="premium-card p-5">
               <h2 className="text-sm font-semibold text-slate-950">Source Document</h2>
               <p className="mt-3 rounded-md bg-slate-50 p-3 text-sm leading-6 text-slate-600">No source document attached.</p>
             </section>
           ) : null}
 
-          <section className="surface rounded-lg p-5">
+          <section className="premium-card p-5">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-semibold text-slate-950">AI Brief</h2>
               <span className="rounded-full bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 ring-1 ring-blue-200">
@@ -392,7 +392,7 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+    <div className="rounded-xl border border-slate-200 bg-gradient-to-br from-slate-50 to-white p-4 shadow-sm">
       <div className="text-xs font-medium uppercase text-slate-500">{label}</div>
       <div className="mt-2 text-lg font-semibold text-slate-950">{value}</div>
     </div>
@@ -455,3 +455,4 @@ function buildSourceDocumentWarnings(invoice: {
   }
   return Array.from(warnings);
 }
+

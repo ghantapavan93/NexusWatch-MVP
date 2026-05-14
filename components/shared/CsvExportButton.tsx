@@ -15,7 +15,7 @@ export function CsvExportButton({ fileName, csv }: { fileName: string; csv: stri
     <button
       type="button"
       onClick={downloadCsv}
-      className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-slate-800"
+      className="primary-button px-3 py-2 text-sm"
     >
       Export CSV
     </button>

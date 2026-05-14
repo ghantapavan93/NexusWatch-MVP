@@ -71,11 +71,11 @@ export function InvoiceActions({ invoiceId, shipToState }: { invoiceId: string; 
   return (
     <>
       <Toast message={toastMessage} onClose={() => setToastMessage("")} />
-      <section className="surface rounded-lg p-5">
+      <section className="premium-card p-5">
         <h2 className="text-sm font-semibold text-slate-950">Actions</h2>
         <div className="mt-4 grid gap-3 sm:grid-cols-3">
           <button
-            className="inline-flex items-center justify-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60"
+            className="secondary-button px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
             type="button"
             disabled={isSaving}
             onClick={() => updateStatus("reviewed", "approved")}
@@ -84,7 +84,7 @@ export function InvoiceActions({ invoiceId, shipToState }: { invoiceId: string; 
             Mark Reviewed
           </button>
           <button
-            className="inline-flex items-center justify-center gap-2 rounded-md bg-blue-700 px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60"
+            className="primary-button px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
             type="button"
             disabled={isSaving}
             onClick={() => updateStatus("open", "accounting_review")}
@@ -95,7 +95,7 @@ export function InvoiceActions({ invoiceId, shipToState }: { invoiceId: string; 
           <Link
             href="/exports"
             onClick={exportInvoice}
-            className="inline-flex items-center justify-center gap-2 rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white shadow-sm hover:bg-slate-800"
+            className="primary-button px-3 py-2 text-sm"
           >
             <Download className="h-4 w-4" />
             Export Invoice
@@ -106,3 +106,4 @@ export function InvoiceActions({ invoiceId, shipToState }: { invoiceId: string; 
     </>
   );
 }
+
