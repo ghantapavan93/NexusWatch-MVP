@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowUpDown,
@@ -68,6 +68,8 @@ const SEGMENTS: { id: Segment; label: string; icon: typeof FileText }[] = [
 ];
 
 export function PremiumInvoiceTable({ invoices, rules }: { invoices: Invoice[]; rules: NexusRule[] }) {
+  const topScrollRef = useRef<HTMLDivElement | null>(null);
+  const tableScrollRef = useRef<HTMLDivElement | null>(null);
   const [search, setSearch] = useState("");
   const [stateFilter, setStateFilter] = useState("all");
   const [sourceFilter, setSourceFilter] = useState("all");
@@ -175,6 +177,14 @@ export function PremiumInvoiceTable({ invoices, rules }: { invoices: Invoice[]; 
     setSavedViewMessage(`${label} saved locally for this session.`);
   }
 
+  function syncHorizontalScroll(source: "top" | "table") {
+    const top = topScrollRef.current;
+    const table = tableScrollRef.current;
+    if (!top || !table) return;
+    if (source === "top" && table.scrollLeft !== top.scrollLeft) table.scrollLeft = top.scrollLeft;
+    if (source === "table" && top.scrollLeft !== table.scrollLeft) top.scrollLeft = table.scrollLeft;
+  }
+
   return (
     <div className="space-y-6">
       <section className="overflow-hidden rounded-[1.35rem] border border-indigo-950/10 bg-[radial-gradient(circle_at_10%_20%,rgba(49,46,129,0.95),rgba(15,23,42,0.98)_48%,rgba(17,24,39,1))] p-6 text-white shadow-[0_24px_60px_rgba(15,23,42,0.18)]">
@@ -270,7 +280,15 @@ export function PremiumInvoiceTable({ invoices, rules }: { invoices: Invoice[]; 
             Sorted by {readable(sortKey)}
           </span>
         </div>
-        <div className="overflow-x-auto">
+        <div
+          ref={topScrollRef}
+          onScroll={() => syncHorizontalScroll("top")}
+          className="overflow-x-auto border-b border-slate-200 bg-slate-50/80 px-4 py-2"
+          aria-label="Scroll invoice columns"
+        >
+          <div className="h-2 min-w-[1540px]" />
+        </div>
+        <div ref={tableScrollRef} onScroll={() => syncHorizontalScroll("table")} className="overflow-x-auto">
           <table className="min-w-[1540px] divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50/90 text-left text-xs font-bold uppercase tracking-wide text-slate-500">
               <tr>
