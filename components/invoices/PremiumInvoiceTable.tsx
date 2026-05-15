@@ -181,8 +181,17 @@ export function PremiumInvoiceTable({ invoices, rules }: { invoices: Invoice[]; 
     const top = topScrollRef.current;
     const table = tableScrollRef.current;
     if (!top || !table) return;
-    if (source === "top" && table.scrollLeft !== top.scrollLeft) table.scrollLeft = top.scrollLeft;
-    if (source === "table" && top.scrollLeft !== table.scrollLeft) top.scrollLeft = table.scrollLeft;
+    const maxTop = Math.max(top.scrollWidth - top.clientWidth, 1);
+    const maxTable = Math.max(table.scrollWidth - table.clientWidth, 1);
+
+    if (source === "top") {
+      const next = (top.scrollLeft / maxTop) * maxTable;
+      if (Math.abs(table.scrollLeft - next) > 1) table.scrollLeft = next;
+    }
+    if (source === "table") {
+      const next = (table.scrollLeft / maxTable) * maxTop;
+      if (Math.abs(top.scrollLeft - next) > 1) top.scrollLeft = next;
+    }
   }
 
   return (
@@ -283,7 +292,7 @@ export function PremiumInvoiceTable({ invoices, rules }: { invoices: Invoice[]; 
         <div
           ref={topScrollRef}
           onScroll={() => syncHorizontalScroll("top")}
-          className="overflow-x-auto border-b border-slate-200 bg-slate-50/80 px-4 py-2"
+          className="overflow-x-auto border-b border-slate-200 bg-slate-50/80 py-2"
           aria-label="Scroll invoice columns"
         >
           <div className="h-2 min-w-[1540px]" />
@@ -292,7 +301,7 @@ export function PremiumInvoiceTable({ invoices, rules }: { invoices: Invoice[]; 
           <table className="min-w-[1540px] divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50/90 text-left text-xs font-bold uppercase tracking-wide text-slate-500">
               <tr>
-                <th className="px-4 py-4">Invoice</th>
+                <th className="sticky left-0 z-10 bg-slate-50/95 px-4 py-4 shadow-[8px_0_12px_-12px_rgba(15,23,42,0.35)]">Invoice</th>
                 <th className="px-4 py-4">Customer</th>
                 <th className="px-4 py-4">Invoice Date</th>
                 <th className="px-4 py-4">Ship To</th>
@@ -344,7 +353,7 @@ function InvoiceRow({ invoice, invoices, rules }: { invoice: Invoice; invoices: 
 
   return (
     <tr className={`transition hover:bg-slate-50 ${impact.thresholdStatus === "crossed" ? "bg-red-50/35" : ""}`}>
-      <td className="px-4 py-4">
+      <td className="sticky left-0 z-10 bg-inherit px-4 py-4 shadow-[8px_0_12px_-12px_rgba(15,23,42,0.35)]">
         <Link className="font-bold text-blue-700 hover:text-blue-900" href={`/invoices/${invoice.id}`}>
           {invoice.invoiceNumber}
         </Link>
