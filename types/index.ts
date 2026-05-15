@@ -58,6 +58,7 @@ export type Invoice = {
   totalAmount: number;
   taxableAmount: number;
   sourceType: "manual" | "paste" | "pdf_preview";
+  status?: OperationalStatus;
   reviewStatus: InvoiceStatus;
   riskStatus: ThresholdStatus | "needs_review";
   notes?: string;
@@ -86,6 +87,8 @@ export type Invoice = {
   } | null;
   lineItems: LineItem[];
   flags: ReviewFlag[];
+  createdAt?: string | null;
+  updatedAt?: string | null;
 };
 
 export type StateNexusSummary = {
@@ -100,6 +103,17 @@ export type StateNexusSummary = {
   status: ThresholdStatus;
   latestInvoice?: Invoice;
   nextAction: string;
+};
+
+export type ExportHistory = {
+  id: string;
+  exportType: ExportType | string;
+  stateCode?: string | null;
+  dateFrom?: string | null;
+  dateTo?: string | null;
+  rowCount: number;
+  fileName?: string | null;
+  createdAt?: string | null;
 };
 
 export type ExportType =

@@ -1,4 +1,4 @@
-const OCR_PAGE_LIMIT = 2;
+const OCR_PAGE_LIMIT = 5;
 const OCR_RENDER_SCALE = 2;
 
 export type OcrResult = {

@@ -1,12 +1,15 @@
 import Link from "next/link";
+import { cookies } from "next/headers";
 import type { ReactNode } from "react";
 import {
   AlertTriangle,
   ArrowRight,
+  CheckCircle2,
   ClipboardCheck,
   ClipboardList,
   Eye,
   FileCheck2,
+  FileText,
   FileWarning,
   Flag,
   ShieldCheck,
@@ -16,13 +19,25 @@ import {
 } from "lucide-react";
 import { RecentInvoices } from "@/components/dashboard/RecentInvoices";
 import { ReviewQueuePreview } from "@/components/dashboard/ReviewQueuePreview";
+import { DataModeToggle } from "@/components/dashboard/DataModeToggle";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { StatusBadge } from "@/components/shared/StatusBadge";
 import { generateAiBrief } from "@/lib/aiBrief";
 import { formatCurrency, formatPercent } from "@/lib/format";
 import { buildStateSummaries } from "@/lib/nexus";
 import { getNexusWatchData } from "@/lib/supabaseData";
-import { buildStateExposureDetails } from "@/lib/thresholdImpact";
+import {
+  buildInvoiceThresholdImpact,
+  buildStateExposureDetails,
+  getInvoiceActivityDate,
+  hasSourceDocument,
+  isDraftInvoice,
+  isManualReviewInvoice,
+  isNormalExportEligible,
+  isOcrReviewInvoice,
+  isReviewQueueInvoice,
+  isReviewedInvoice,
+} from "@/lib/thresholdImpact";
 import type { StateNexusSummary, ThresholdStatus } from "@/types";
 
 export const dynamic = "force-dynamic";
@@ -65,33 +80,45 @@ const statusTone: Record<ThresholdStatus, { bar: string; text: string; panel: st
 };
 
 export default async function DashboardPage() {
-  const { invoices, rules } = await getNexusWatchData();
+  const cookieStore = await cookies();
+  const requestedDataMode = cookieStore.get("nexuswatch_data_mode")?.value === "demo" ? "demo" : "live";
+  const liveInvoiceNumbers = parseLiveInvoiceNumbers(cookieStore.get("nexuswatch_live_invoice_numbers")?.value);
+  const { invoices, rules, source } = await getNexusWatchData({
+    mode: requestedDataMode,
+    liveInvoiceNumbers: requestedDataMode === "live" ? liveInvoiceNumbers : undefined,
+  });
   const states = buildStateSummaries(rules, invoices).sort((a, b) => b.percentUsed - a.percentUsed);
   const stateExposure = rules
     .map((rule) => buildStateExposureDetails(rule, invoices))
     .sort((a, b) => b.percentUsed - a.percentUsed);
-  const reviewInvoices = invoices.filter(
-    (invoice) =>
-      invoice.reviewStatus === "needs_review" ||
-      invoice.reviewStatus === "accounting_review" ||
-      invoice.flags.length > 0
-  );
-  const approvedInvoices = invoices.filter((invoice) => invoice.reviewStatus === "approved");
+  const reviewInvoices = invoices.filter(isReviewQueueInvoice);
+  const accountingReviewInvoices = invoices.filter((invoice) => invoice.reviewStatus === "accounting_review");
+  const approvedInvoices = invoices.filter(isReviewedInvoice);
+  const exportReadyInvoices = invoices.filter(isNormalExportEligible);
+  const ocrNeedsReviewInvoices = invoices.filter(isOcrReviewInvoice);
+  const manualReviewInvoices = invoices.filter((invoice) => !isDraftInvoice(invoice) && !isReviewedInvoice(invoice) && isManualReviewInvoice(invoice));
+  const sourceDocumentInvoices = invoices.filter(hasSourceDocument);
+  const healthyStates = states.filter((state) => state.status === "safe");
   const warningStates = states.filter((state) => state.status === "warning");
   const crossedStates = states.filter((state) => state.status === "crossed");
   const watchStates = states.filter((state) => state.status === "watch");
   const highestRiskState = states[0];
   const highestRiskExposure = stateExposure[0];
   const heroInvoice = highestRiskExposure?.highestRiskInvoice;
-  const tx = states.find((state) => state.stateCode === "TX") ?? highestRiskState;
-  const txInvoice = invoices.find((invoice) => invoice.invoiceNumber === "INV-1048") ?? heroInvoice;
+  const nextCrossingRisk = invoices
+    .map((invoice) => ({ invoice, impact: buildInvoiceThresholdImpact(invoice, invoices, rules) }))
+    .filter(({ invoice }) => !isReviewedInvoice(invoice))
+    .sort((a, b) => Number(b.impact.thresholdCrossingRisk) - Number(a.impact.thresholdCrossingRisk) || b.impact.percentAfterInvoice - a.impact.percentAfterInvoice || b.invoice.taxableAmount - a.invoice.taxableAmount)[0];
+  const recentInvoices = [...invoices].sort((a, b) => getInvoiceActivityDate(b).localeCompare(getInvoiceActivityDate(a)));
+  const briefState = highestRiskState;
+  const briefInvoice = nextCrossingRisk?.invoice ?? heroInvoice;
   const brief = generateAiBrief({
-    state: tx?.stateName ?? "Texas",
-    percent: tx?.percentUsed ?? 0,
-    invoiceNumber: txInvoice?.invoiceNumber,
-    taxableAmount: txInvoice?.taxableAmount,
-    status: tx?.status ?? "safe",
-    mayPushOver: true,
+    state: briefState?.stateName ?? "No configured state",
+    percent: briefState?.percentUsed ?? 0,
+    invoiceNumber: briefInvoice?.invoiceNumber,
+    taxableAmount: briefInvoice?.taxableAmount,
+    status: briefState?.status ?? "safe",
+    mayPushOver: Boolean(nextCrossingRisk?.impact.thresholdCrossingRisk),
   });
 
   return (
@@ -100,33 +127,45 @@ export default async function DashboardPage() {
         title="Nexus Exposure Command Center"
         description="Real-time review of invoice activity against configured state thresholds."
         action={
-          <Link className="primary-button px-4 py-2.5 text-sm" href="/review">
-            Review Queue
-            <ArrowRight className="h-4 w-4" />
-          </Link>
+          <div className="flex flex-wrap items-center justify-end gap-3">
+            <DataModeToggle mode={requestedDataMode} source={source} />
+            <Link className="primary-button px-4 py-2.5 text-sm" href="/review">
+              Review Queue
+              <ArrowRight className="h-4 w-4" />
+            </Link>
+          </div>
         }
       />
 
       <section className="grid gap-5 xl:grid-cols-[minmax(0,1.2fr)_minmax(360px,0.8fr)]">
         <CommandHero
           stateCount={states.length}
+          healthyCount={healthyStates.length}
           reviewCount={reviewInvoices.length}
-          warningCount={warningStates.length}
-          crossedCount={crossedStates.length}
+          accountingReviewCount={accountingReviewInvoices.length}
         />
         <RecommendedActions
           reviewCount={reviewInvoices.length}
+          accountingReviewCount={accountingReviewInvoices.length}
+          ocrCount={ocrNeedsReviewInvoices.length}
           highestRiskState={highestRiskState}
-          highestRiskInvoice={heroInvoice?.invoiceNumber ?? txInvoice?.invoiceNumber}
+          highestRiskInvoice={nextCrossingRisk?.invoice.invoiceNumber ?? heroInvoice?.invoiceNumber}
         />
       </section>
 
       <section className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-        <RiskMetric icon={<Eye className="h-6 w-6" />} label="75% Watch" value={watchStates.length} detail="Monitoring recommended" tone="amber" pill="Good" />
-        <RiskMetric icon={<AlertTriangle className="h-6 w-6" />} label="90% Warning" value={warningStates.length} detail="Accounting review soon" tone="orange" pill="Watch" />
-        <RiskMetric icon={<TrendingUp className="h-6 w-6" />} label="Crossed Threshold" value={crossedStates.length} detail="Configured threshold exceeded" tone="red" pill="Alert" />
-        <RiskMetric icon={<Sparkles className="h-6 w-6" />} label="Next Crossing Risk" value={highestRiskState?.stateName ?? "None"} detail={`Review invoice ${heroInvoice?.invoiceNumber ?? txInvoice?.invoiceNumber ?? "when available"}`} tone="indigo" />
-        <RiskMetric icon={<Flag className="h-6 w-6" />} label={`${highestRiskState?.stateCode ?? "TX"} Remaining Before Threshold`} value={formatCurrency(highestRiskState?.remaining ?? 0)} detail="Based on configured exposure" tone="red" />
+        <RiskMetric href="/states" icon={<Eye className="h-6 w-6" />} label="75% Watch" value={watchStates.length} detail="Configured states in the watch band" tone="amber" pill="Watch" />
+        <RiskMetric href="/states" icon={<AlertTriangle className="h-6 w-6" />} label="90% Warning" value={warningStates.length} detail="Configured states in the warning band" tone="orange" pill="Review" />
+        <RiskMetric href="/states" icon={<TrendingUp className="h-6 w-6" />} label="Above Configured Threshold" value={crossedStates.length} detail="Configured threshold crossed" tone="red" pill="Alert" />
+        <RiskMetric href={nextCrossingRisk ? `/invoices/${nextCrossingRisk.invoice.id}` : "/invoices"} icon={<Sparkles className="h-6 w-6" />} label="Next Crossing Risk" value={nextCrossingRisk?.invoice.invoiceNumber ?? "None"} detail={nextCrossingRisk ? `${nextCrossingRisk.invoice.shipToState ?? "Missing state"} projected exposure ${formatPercent(nextCrossingRisk.impact.percentAfterInvoice)}` : "Threshold preview unavailable"} tone="indigo" />
+        <RiskMetric href={highestRiskState ? `/states/${highestRiskState.stateCode}` : "/states"} icon={<Flag className="h-6 w-6" />} label={`${highestRiskState?.stateCode ?? "--"} Remaining Before Threshold`} value={formatCurrency(highestRiskState?.remaining ?? 0)} detail="Based on configured exposure" tone="red" />
+      </section>
+
+      <section className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <RiskMetric href="/invoices?filter=ocr_needs_review" icon={<FileCheck2 className="h-6 w-6" />} label="OCR Needs Review" value={ocrNeedsReviewInvoices.length} detail="OCR records remain review based" tone="amber" />
+        <RiskMetric href="/invoices?source=document" icon={<FileText className="h-6 w-6" />} label="Source Documents Linked" value={sourceDocumentInvoices.length} detail="Invoices with linked PDFs" tone="indigo" />
+        <RiskMetric href="/exports" icon={<CheckCircle2 className="h-6 w-6" />} label="Reviewed Export Readiness" value={exportReadyInvoices.length} detail={`${reviewInvoices.length} blocked by review items`} tone="indigo" />
+        <RiskMetric href="/invoices" icon={<FileWarning className="h-6 w-6" />} label="Manual Review Safety" value={manualReviewInvoices.length} detail="Manual or extracted fields awaiting review" tone="orange" />
       </section>
 
       <section className="mt-5 grid gap-4 xl:grid-cols-5">
@@ -142,13 +181,13 @@ export default async function DashboardPage() {
 
       <section className="mt-6 grid gap-6 xl:grid-cols-2">
         <ReviewQueuePreview invoices={reviewInvoices} />
-        <RecentInvoices invoices={[...invoices].sort((a, b) => b.invoiceDate.localeCompare(a.invoiceDate))} />
+        <RecentInvoices invoices={recentInvoices} />
       </section>
 
       <div className="mt-6 grid gap-4 md:grid-cols-3">
-        <FooterPulse label="Approved export readiness" value={approvedInvoices.length} detail="Approved invoices ready for reviewed export" />
-        <FooterPulse label="OCR/manual review safety" value={reviewInvoices.filter((invoice) => invoice.extractionStatus === "ocr_needs_review").length} detail="OCR records remain review based" />
-        <FooterPulse label="Decision support mode" value="On" detail="Final tax treatment should be reviewed with accounting" />
+        <FooterPulse href="/exports" label="Approved / reviewed invoices" value={approvedInvoices.length} detail="Approved or exported invoices in live data" />
+        <FooterPulse href="/invoices?filter=ocr_needs_review" label="OCR/manual review safety" value={ocrNeedsReviewInvoices.length + manualReviewInvoices.length} detail="Source extraction remains review based" />
+        <FooterPulse href="/rules" label="Decision support mode" value="On" detail="Final treatment should be reviewed with accounting" />
       </div>
     </>
   );
@@ -156,14 +195,14 @@ export default async function DashboardPage() {
 
 function CommandHero({
   stateCount,
+  healthyCount,
   reviewCount,
-  warningCount,
-  crossedCount,
+  accountingReviewCount,
 }: {
   stateCount: number;
+  healthyCount: number;
   reviewCount: number;
-  warningCount: number;
-  crossedCount: number;
+  accountingReviewCount: number;
 }) {
   return (
     <section className="relative overflow-hidden rounded-3xl bg-[radial-gradient(circle_at_top_left,#4338ca_0%,#11105f_38%,#020617_100%)] p-7 text-white shadow-2xl shadow-blue-950/25">
@@ -181,10 +220,10 @@ function CommandHero({
           </div>
         </div>
         <div className="mt-8 grid gap-6 md:grid-cols-4">
-          <HeroKpi icon={<ShieldCheck className="h-8 w-8" />} value={stateCount} label="States Monitored" detail="Demo rules configured" />
-          <HeroKpi icon={<ClipboardList className="h-8 w-8" />} value={reviewCount} label="Invoices Needing Review" detail="Missing data or risk flags" />
-          <HeroKpi icon={<AlertTriangle className="h-8 w-8" />} value={warningCount} label="States in 90% Warning" detail="Approaching threshold" />
-          <HeroKpi icon={<Target className="h-8 w-8" />} value={crossedCount} label="Threshold Crossed" detail="Review recommended" />
+          <HeroKpi href="/states" icon={<ShieldCheck className="h-8 w-8" />} value={stateCount} label="States Monitored" detail="Configured state rules" />
+          <HeroKpi href="/states" icon={<CheckCircle2 className="h-8 w-8" />} value={healthyCount} label="Healthy States" detail="Below configured watch band" />
+          <HeroKpi href="/review" icon={<ClipboardList className="h-8 w-8" />} value={reviewCount} label="Invoices Needing Review" detail="Review queue and extraction items" />
+          <HeroKpi href="/review" icon={<Target className="h-8 w-8" />} value={accountingReviewCount} label="Accounting Review" detail="Awaiting accounting completion" />
         </div>
       </div>
     </section>
@@ -193,10 +232,14 @@ function CommandHero({
 
 function RecommendedActions({
   reviewCount,
+  accountingReviewCount,
+  ocrCount,
   highestRiskState,
   highestRiskInvoice,
 }: {
   reviewCount: number;
+  accountingReviewCount: number;
+  ocrCount: number;
   highestRiskState?: StateNexusSummary;
   highestRiskInvoice?: string;
 }) {
@@ -207,8 +250,8 @@ function RecommendedActions({
       href: "/review",
     },
     {
-      title: "Send unclear invoices to Accounting Review",
-      detail: "Ensure high-risk items are validated",
+      title: "Complete Accounting Review items",
+      detail: `${accountingReviewCount} invoices in accounting review`,
       href: "/review",
     },
     {
@@ -218,8 +261,8 @@ function RecommendedActions({
     },
     {
       title: "Review OCR detected fields before approval",
-      detail: highestRiskInvoice ? `Confirm invoice ${highestRiskInvoice}` : "Confirm accuracy of extracted data",
-      href: "/upload",
+      detail: ocrCount ? `${ocrCount} OCR items need review` : highestRiskInvoice ? `Confirm invoice ${highestRiskInvoice}` : "Confirm accuracy of extracted data",
+      href: ocrCount ? "/invoices?filter=ocr_needs_review" : "/invoices",
     },
   ];
 
@@ -272,7 +315,7 @@ function DashboardStateCard({ state }: { state: StateExposure }) {
           </div>
         </div>
         <span className={`rounded-full px-2.5 py-1 text-xs font-bold ring-1 ring-inset ${status === "crossed" ? "bg-red-50 text-red-700 ring-red-200" : status === "warning" ? "bg-orange-50 text-orange-700 ring-orange-200" : "bg-emerald-50 text-emerald-700 ring-emerald-200"}`}>
-          {status === "safe" ? "Good" : status === "warning" ? "96.0%" : status === "crossed" ? formatPercent(state.percentUsed) : "Watch"}
+          {status === "safe" ? "Healthy" : formatPercent(state.percentUsed)}
         </span>
       </div>
       <ThresholdBar percent={state.percentUsed} status={status} className="mt-5" />
@@ -288,7 +331,7 @@ function DashboardStateCard({ state }: { state: StateExposure }) {
       <div className="mt-4 grid grid-cols-2 border-t border-slate-200 pt-3 text-sm">
         <div>
           <div className="text-xs text-slate-500">In review</div>
-          <div className="font-bold text-slate-950">{state.reviewCount + state.accountingCount}</div>
+          <div className="font-bold text-slate-950">{state.inReviewCount}</div>
         </div>
         <div>
           <div className="text-xs text-slate-500">Approved</div>
@@ -336,7 +379,10 @@ function DashboardStateMonitor({ states, exposures }: { states: StateNexusSummar
               <th className="px-5 py-3 text-right">Configured Threshold</th>
               <th className="px-5 py-3 text-right">Remaining</th>
               <th className="px-5 py-3">Status</th>
-              <th className="px-5 py-3">Trend</th>
+              <th className="px-5 py-3 text-right">In Review</th>
+              <th className="px-5 py-3 text-right">Approved</th>
+              <th className="px-5 py-3 text-right">OCR</th>
+              <th className="px-5 py-3">Next Action</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 bg-white">
@@ -352,6 +398,9 @@ function DashboardStateMonitor({ states, exposures }: { states: StateNexusSummar
                   <td className="px-5 py-4">
                     <StatusBadge status={state.status === "safe" ? "healthy" : state.status} />
                   </td>
+                  <td className="px-5 py-4 text-right font-semibold text-slate-800">{exposure?.inReviewCount ?? 0}</td>
+                  <td className="px-5 py-4 text-right font-semibold text-slate-800">{exposure?.approvedCount ?? 0}</td>
+                  <td className="px-5 py-4 text-right font-semibold text-slate-800">{exposure?.ocrNeedsReviewCount ?? 0}</td>
                   <td className="px-5 py-4">
                     <div className="flex items-center gap-2">
                       <TrendingUp className={`h-4 w-4 ${state.status === "safe" ? "text-slate-500" : statusTone[state.status].text}`} />
@@ -408,6 +457,7 @@ function DashboardAiBrief({
 }
 
 function RiskMetric({
+  href,
   icon,
   label,
   value,
@@ -415,6 +465,7 @@ function RiskMetric({
   tone,
   pill,
 }: {
+  href: string;
   icon: ReactNode;
   label: string;
   value: string | number;
@@ -430,7 +481,7 @@ function RiskMetric({
   }[tone];
 
   return (
-    <div className="premium-card p-5">
+    <Link href={href} className="premium-card block p-5 transition hover:-translate-y-0.5 hover:shadow-xl">
       <div className="flex items-start justify-between gap-4">
         <span className={`flex h-12 w-12 items-center justify-center rounded-2xl ring-1 ${tones}`}>{icon}</span>
         {pill ? (
@@ -440,20 +491,20 @@ function RiskMetric({
       <div className="mt-4 text-xs font-bold uppercase tracking-wide text-slate-500">{label}</div>
       <div className="mt-1 text-3xl font-bold text-slate-950">{value}</div>
       <div className="mt-2 text-xs leading-5 text-slate-500">{detail}</div>
-    </div>
+    </Link>
   );
 }
 
-function HeroKpi({ icon, value, label, detail }: { icon: ReactNode; value: number | string; label: string; detail: string }) {
+function HeroKpi({ href, icon, value, label, detail }: { href: string; icon: ReactNode; value: number | string; label: string; detail: string }) {
   return (
-    <div className="border-white/10 md:border-l md:pl-8">
+    <Link href={href} className="block border-white/10 transition hover:text-cyan-100 md:border-l md:pl-8">
       <div className="flex items-center gap-4">
         <span className="text-cyan-300">{icon}</span>
         <div className="text-4xl font-bold">{value}</div>
       </div>
       <div className="mt-3 text-sm font-bold text-white">{label}</div>
       <div className="mt-1 text-xs text-blue-200">{detail}</div>
-    </div>
+    </Link>
   );
 }
 
@@ -494,9 +545,9 @@ function BriefLine({ icon, text }: { icon: ReactNode; text: string }) {
   );
 }
 
-function FooterPulse({ label, value, detail }: { label: string; value: string | number; detail: string }) {
+function FooterPulse({ href, label, value, detail }: { href: string; label: string; value: string | number; detail: string }) {
   return (
-    <div className="premium-card p-4">
+    <Link href={href} className="premium-card block p-4 transition hover:-translate-y-0.5 hover:shadow-lg">
       <div className="flex items-center justify-between gap-3">
         <div>
           <div className="text-xs font-bold uppercase tracking-wide text-slate-500">{label}</div>
@@ -508,7 +559,7 @@ function FooterPulse({ label, value, detail }: { label: string; value: string | 
           <span className="relative inline-flex h-3 w-3 rounded-full bg-emerald-500" />
         </span>
       </div>
-    </div>
+    </Link>
   );
 }
 
@@ -519,4 +570,12 @@ function MetricLine({ label, value, danger = false }: { label: string; value: st
       <span className={`font-bold ${danger ? "text-red-600" : "text-slate-950"}`}>{value}</span>
     </div>
   );
+}
+
+function parseLiveInvoiceNumbers(value?: string) {
+  if (!value) return [];
+  return decodeURIComponent(value)
+    .split(",")
+    .map((invoiceNumber) => invoiceNumber.trim())
+    .filter(Boolean);
 }

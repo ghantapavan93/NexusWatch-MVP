@@ -20,9 +20,9 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
 
   const rule = rules.find((item) => item.stateCode === invoice.shipToState) ?? rules[0];
   const stateSummary = buildStateSummaries(rules, invoices).find((item) => item.stateCode === rule.stateCode);
-  const currentTaxableTotal = stateSummary?.taxableTotal ?? 0;
-  const impact = previewInvoiceImpact(currentTaxableTotal, invoice.taxableAmount, rule.thresholdAmount);
   const thresholdImpact = buildInvoiceThresholdImpact(invoice, invoices, rules);
+  const currentTaxableTotal = thresholdImpact.currentExposureBeforeInvoice;
+  const impact = previewInvoiceImpact(currentTaxableTotal, invoice.taxableAmount, thresholdImpact.thresholdAmount);
   const lineCountedAmount = invoice.lineItems.reduce((sum, item) => sum + (item.taxableAmount ?? 0), 0);
   const brief = generateAiBrief({
     state: rule.stateName,

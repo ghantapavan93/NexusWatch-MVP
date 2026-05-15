@@ -7,9 +7,13 @@ const headers = [
   "Ship To",
   "Bill To",
   "Category",
+  "Line Description",
   "Line Amount",
   "Taxable Amount",
-  "Status",
+  "Operational Status",
+  "Review Status",
+  "Extraction Status",
+  "Source Document Linked",
   "Flags",
 ];
 
@@ -28,9 +32,13 @@ export function invoiceLineItemsToCsv(invoices: Invoice[]) {
       invoice.shipToState ?? "",
       invoice.billToState ?? "",
       item.category,
+      item.description,
       item.amount,
       item.taxableAmount ?? 0,
+      invoice.status ?? "",
       invoice.reviewStatus,
+      invoice.extractionStatus ?? "",
+      invoice.documentId || invoice.pdfFileName || invoice.pdfPublicUrl ? "yes" : "no",
       invoice.flags.join("; "),
     ])
   );

@@ -64,7 +64,7 @@ export async function POST(request: NextRequest) {
   }
 
   const { data } = supabase.storage.from(PDF_BUCKET).getPublicUrl(storagePath);
-  const textBasedExtraction = extractTextFromTextBasedPdf(bytes);
+  const textBasedExtraction = await extractTextFromTextBasedPdf(bytes);
   const ocrResult = textBasedExtraction ? null : await extractTextWithPdfOcr(bytes);
   const extractedText = sanitizeExtractedText(textBasedExtraction || ocrResult?.text || "");
   const detected = extractedText ? parseInvoiceText(extractedText) : null;
@@ -135,6 +135,7 @@ export async function POST(request: NextRequest) {
     fileName: file.name,
     storagePath,
     publicUrl: data.publicUrl,
+    extractedText: extractedText || undefined,
     extractionStatus,
     extractionMethod,
     ocrConfidence: ocrResult?.confidence ?? null,
@@ -149,6 +150,7 @@ export async function POST(request: NextRequest) {
       publicUrl: data.publicUrl,
       contentType: file.type,
       size: file.size,
+      extractedText: extractedText || undefined,
       extractionStatus,
       extractionMethod,
       ocrConfidence: ocrResult?.confidence ?? null,
@@ -183,14 +185,90 @@ async function insertDocumentMetadataWithFallback(
   return insert(fallbackPayload);
 }
 
-function extractTextFromTextBasedPdf(bytes: Buffer) {
+async function extractTextFromTextBasedPdf(bytes: Buffer) {
+  const pdfJsText = await extractTextWithPdfJs(bytes);
+  if (looksLikeInvoiceText(pdfJsText)) return pdfJsText.slice(0, 40000);
+
   const raw = bytes.toString("latin1");
   const literalStrings = Array.from(raw.matchAll(/\(([^()]{3,})\)/g))
     .map((match) => decodePdfString(match[1]))
     .filter((value) => /[A-Za-z0-9]/.test(value));
   const text = sanitizeExtractedText(literalStrings.join("\n").replace(/\s+\n/g, "\n").trim());
-  const looksLikeInvoice = /\b(invoice|total|amount|customer|ship\s*to|bill\s*to|due\s*date)\b/i.test(text);
-  return text.length > 40 && looksLikeInvoice ? text.slice(0, 40000) : "";
+  return looksLikeInvoiceText(text) ? text.slice(0, 40000) : "";
+}
+
+async function extractTextWithPdfJs(bytes: Buffer) {
+  try {
+    const pdfjs = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    const document = await pdfjs.getDocument({
+      data: new Uint8Array(bytes),
+      disableFontFace: true,
+      isEvalSupported: false,
+      useSystemFonts: true,
+    } as never).promise;
+    const pageLimit = Math.min(document.numPages, 10);
+    const pages: string[] = [];
+
+    for (let pageNumber = 1; pageNumber <= pageLimit; pageNumber += 1) {
+      const page = await document.getPage(pageNumber);
+      const content = await page.getTextContent();
+      const pageText = rebuildPdfTextLines(content.items);
+      if (pageText) pages.push(pageText);
+    }
+
+    return sanitizeExtractedText(pages.join("\n\n"));
+  } catch {
+    return "";
+  }
+}
+
+function rebuildPdfTextLines(items: unknown[]) {
+  const textItems = items
+    .map((item) => {
+      const textItem = item as { str?: unknown; transform?: unknown; width?: unknown };
+      const transform = Array.isArray(textItem.transform) ? textItem.transform : [];
+      const str = typeof textItem.str === "string" ? textItem.str.trim() : "";
+      const x = typeof transform[4] === "number" ? transform[4] : 0;
+      const y = typeof transform[5] === "number" ? transform[5] : 0;
+      const width = typeof textItem.width === "number" ? textItem.width : str.length * 5;
+      return { str, x, y, width };
+    })
+    .filter((item) => item.str);
+
+  const rows: { y: number; items: typeof textItems }[] = [];
+  for (const item of textItems.sort((a, b) => b.y - a.y || a.x - b.x)) {
+    const row = rows.find((candidate) => Math.abs(candidate.y - item.y) <= 3);
+    if (row) {
+      row.items.push(item);
+      row.y = (row.y + item.y) / 2;
+    } else {
+      rows.push({ y: item.y, items: [item] });
+    }
+  }
+
+  return rows
+    .sort((a, b) => b.y - a.y)
+    .map((row) =>
+      row.items
+        .sort((a, b) => a.x - b.x)
+        .reduce<{ text: string; right: number }>(
+          (line, item) => {
+            const gap = item.x - line.right;
+            const separator = line.text && gap > 80 ? "\t" : line.text && gap > 8 ? " " : "";
+            return {
+              text: `${line.text}${separator}${item.str}`.trim(),
+              right: Math.max(line.right, item.x + item.width),
+            };
+          },
+          { text: "", right: 0 }
+        ).text
+    )
+    .filter(Boolean)
+    .join("\n");
+}
+
+function looksLikeInvoiceText(text: string) {
+  return text.length > 40 && /\b(invoice|total|amount|customer|ship\s*to|bill\s*to|due\s*date)\b/i.test(text);
 }
 
 function decodePdfString(value: string) {
@@ -207,7 +285,7 @@ function decodePdfString(value: string) {
 function sanitizeExtractedText(value: string) {
   return value
     .replace(/\u0000/g, "")
-    .replace(/[^\S\r\n]+/g, " ")
+    .replace(/[^\S\t\r\n]+/g, " ")
     .replace(/[^\x09\x0A\x0D\x20-\x7E]/g, "")
     .trim();
 }

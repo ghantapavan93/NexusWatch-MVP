@@ -1,51 +1,97 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
+  ArrowUpDown,
+  CheckCircle2,
   ChevronDown,
   CloudUpload,
   FileCheck2,
+  FileQuestion,
   FileText,
-  Filter,
+  FilterX,
   Mail,
-  MoreVertical,
   Search,
   Server,
   ShieldCheck,
-  Sparkles,
   UploadCloud,
 } from "lucide-react";
 import { StatusBadge } from "@/components/shared/StatusBadge";
 import { formatCurrency, formatDate, formatPercent, stateLabel } from "@/lib/format";
-import type { Invoice } from "@/types";
+import {
+  buildInvoiceThresholdImpact,
+  getInvoiceActivityDate,
+  getOperationalStatus,
+  hasSourceDocument,
+  hasUnknownCategory,
+  isDraftInvoice,
+  isLargeInvoice,
+  isMissingFieldInvoice,
+  isOcrReviewInvoice,
+  isReviewQueueInvoice,
+  isReviewedInvoice,
+  isThresholdWarningInvoice,
+} from "@/lib/thresholdImpact";
+import type { Invoice, NexusRule } from "@/types";
 
-type Segment = "all" | "needs_review" | "accounting_review" | "approved" | "ocr_needs_review" | "draft";
+type Segment =
+  | "all"
+  | "draft"
+  | "needs_review"
+  | "accounting_review"
+  | "approved"
+  | "ocr_needs_review"
+  | "source_document"
+  | "missing_fields"
+  | "threshold_warning"
+  | "crossed"
+  | "large_invoice"
+  | "unknown_category";
 
-const STATE_IMPACT: Record<string, number> = {
-  TX: 118.2,
-  IL: 96,
-  CA: 16,
-  NY: 12.8,
-  WA: 10.6,
-};
+type SortKey = "invoice_date" | "amount" | "risk" | "updated_date";
 
 const SEGMENTS: { id: Segment; label: string; icon: typeof FileText }[] = [
   { id: "all", label: "All Invoices", icon: FileText },
+  { id: "draft", label: "Draft", icon: FileText },
   { id: "needs_review", label: "Needs Review", icon: AlertTriangle },
   { id: "accounting_review", label: "Accounting Review", icon: Search },
-  { id: "approved", label: "Approved", icon: ShieldCheck },
+  { id: "approved", label: "Approved / Reviewed", icon: ShieldCheck },
   { id: "ocr_needs_review", label: "OCR Needs Review", icon: FileCheck2 },
-  { id: "draft", label: "Draft", icon: FileText },
+  { id: "source_document", label: "Source Document Linked", icon: CloudUpload },
+  { id: "missing_fields", label: "Missing Fields", icon: FileQuestion },
+  { id: "threshold_warning", label: "Threshold Warning", icon: AlertTriangle },
+  { id: "crossed", label: "Above Configured Threshold", icon: AlertTriangle },
+  { id: "large_invoice", label: "Large Invoice", icon: AlertTriangle },
+  { id: "unknown_category", label: "Unknown Category", icon: FileQuestion },
 ];
 
-export function PremiumInvoiceTable({ invoices }: { invoices: Invoice[] }) {
+export function PremiumInvoiceTable({ invoices, rules }: { invoices: Invoice[]; rules: NexusRule[] }) {
   const [search, setSearch] = useState("");
   const [stateFilter, setStateFilter] = useState("all");
   const [sourceFilter, setSourceFilter] = useState("all");
   const [reviewStatusFilter, setReviewStatusFilter] = useState("all");
+  const [sortKey, setSortKey] = useState<SortKey>("updated_date");
   const [activeSegment, setActiveSegment] = useState<Segment>("all");
+  const [savedViewMessage, setSavedViewMessage] = useState("");
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const filter = params.get("filter");
+    const source = params.get("source");
+    if (filter && SEGMENTS.some((segment) => segment.id === filter)) setActiveSegment(filter as Segment);
+    if (source === "document") setActiveSegment("source_document");
+  }, []);
+
+  const enriched = useMemo(
+    () =>
+      invoices.map((invoice) => ({
+        invoice,
+        impact: buildInvoiceThresholdImpact(invoice, invoices, rules),
+      })),
+    [invoices, rules]
+  );
 
   const states = useMemo(
     () =>
@@ -68,81 +114,82 @@ export function PremiumInvoiceTable({ invoices }: { invoices: Invoice[] }) {
   const counts = useMemo(
     () => ({
       all: invoices.length,
-      needs_review: invoices.filter((invoice) => invoice.reviewStatus === "needs_review" || invoice.flags.length > 0).length,
+      draft: invoices.filter(isDraftInvoice).length,
+      needs_review: invoices.filter(isReviewQueueInvoice).length,
       accounting_review: invoices.filter((invoice) => invoice.reviewStatus === "accounting_review").length,
-      approved: invoices.filter((invoice) => invoice.reviewStatus === "approved" || invoice.reviewStatus === "exported").length,
-      ocr_needs_review: invoices.filter((invoice) => invoice.extractionStatus === "ocr_needs_review").length,
-      draft: invoices.filter((invoice) => invoice.reviewStatus === "draft").length,
-      sourceDocuments: invoices.filter(
-        (invoice) => invoice.documentId || invoice.pdfFileName || invoice.pdfPublicUrl || invoice.sourceDocument
-      ).length,
+      approved: invoices.filter(isReviewedInvoice).length,
+      ocr_needs_review: invoices.filter(isOcrReviewInvoice).length,
+      source_document: invoices.filter(hasSourceDocument).length,
+      missing_fields: invoices.filter(isMissingFieldInvoice).length,
+      threshold_warning: invoices.filter((invoice) => isThresholdWarningInvoice(invoice, invoices, rules)).length,
+      crossed: enriched.filter(({ impact }) => impact.thresholdStatus === "crossed").length,
+      large_invoice: invoices.filter(isLargeInvoice).length,
+      unknown_category: invoices.filter(hasUnknownCategory).length,
     }),
-    [invoices]
+    [enriched, invoices, rules]
   );
 
   const filteredInvoices = useMemo(() => {
     const query = search.trim().toLowerCase();
 
-    return invoices.filter((invoice) => {
-      const amountText = `${invoice.totalAmount} ${invoice.taxableAmount}`;
-      const matchesSearch =
-        !query ||
-        invoice.invoiceNumber.toLowerCase().includes(query) ||
-        invoice.customerName.toLowerCase().includes(query) ||
-        amountText.includes(query);
-      const matchesState = stateFilter === "all" || invoice.shipToState === stateFilter;
-      const matchesSource = sourceFilter === "all" || getSourceLabel(invoice) === sourceFilter;
-      const matchesReviewStatus = reviewStatusFilter === "all" || invoice.reviewStatus === reviewStatusFilter;
-      const matchesSegment = segmentMatches(invoice, activeSegment);
+    return enriched
+      .filter(({ invoice, impact }) => {
+        const searchable = [
+          invoice.invoiceNumber,
+          invoice.customerName,
+          invoice.shipToState,
+          invoice.billToState,
+          invoice.reviewStatus,
+          getOperationalStatus(invoice),
+          invoice.extractionStatus,
+          formatCurrency(invoice.totalAmount),
+          formatCurrency(invoice.taxableAmount),
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        const matchesSearch = !query || searchable.includes(query);
+        const matchesState = stateFilter === "all" || invoice.shipToState === stateFilter;
+        const matchesSource = sourceFilter === "all" || getSourceLabel(invoice) === sourceFilter;
+        const matchesReviewStatus = reviewStatusFilter === "all" || invoice.reviewStatus === reviewStatusFilter;
+        const matchesSegment = segmentMatches(invoice, activeSegment, impact.thresholdStatus, invoices, rules);
 
-      return matchesSearch && matchesState && matchesSource && matchesReviewStatus && matchesSegment;
-    });
-  }, [activeSegment, invoices, reviewStatusFilter, search, sourceFilter, stateFilter]);
+        return matchesSearch && matchesState && matchesSource && matchesReviewStatus && matchesSegment;
+      })
+      .sort((a, b) => compareInvoices(a, b, sortKey))
+      .map(({ invoice }) => invoice);
+  }, [activeSegment, enriched, invoices, reviewStatusFilter, rules, search, sortKey, sourceFilter, stateFilter]);
 
-  const highRiskTotal = invoices
-    .filter((invoice) => invoice.riskStatus === "crossed" || invoice.flags.includes("may_cross_threshold"))
-    .reduce((sum, invoice) => sum + invoice.taxableAmount, 0);
+  function clearFilters() {
+    setSearch("");
+    setStateFilter("all");
+    setSourceFilter("all");
+    setReviewStatusFilter("all");
+    setSortKey("updated_date");
+    setActiveSegment("all");
+    setSavedViewMessage("");
+  }
+
+  function saveView() {
+    const label = SEGMENTS.find((segment) => segment.id === activeSegment)?.label ?? "Current view";
+    setSavedViewMessage(`${label} saved locally for this session.`);
+  }
 
   return (
     <div className="space-y-6">
-      <section className="grid gap-5 xl:grid-cols-[1fr_300px]">
-        <div className="overflow-hidden rounded-[1.35rem] border border-indigo-950/10 bg-[radial-gradient(circle_at_10%_20%,rgba(49,46,129,0.95),rgba(15,23,42,0.98)_48%,rgba(17,24,39,1))] p-6 text-white shadow-[0_24px_60px_rgba(15,23,42,0.18)]">
-          <div className="grid gap-5 md:grid-cols-5">
-            <HeroMetric icon={FileText} label="Total Invoices" value={counts.all} detail="All time" tone="cyan" />
-            <HeroMetric icon={AlertTriangle} label="Needs Review" value={counts.needs_review} detail="Awaiting attention" tone="amber" />
-            <HeroMetric icon={Search} label="Accounting Review" value={counts.accounting_review} detail="In accounting queue" tone="sky" />
-            <HeroMetric icon={ShieldCheck} label="Approved" value={counts.approved} detail="Ready and complete" tone="emerald" />
-            <HeroMetric icon={FileCheck2} label="Source Documents Linked" value={counts.sourceDocuments} detail="With verified sources" tone="violet" last />
-          </div>
+      <section className="overflow-hidden rounded-[1.35rem] border border-indigo-950/10 bg-[radial-gradient(circle_at_10%_20%,rgba(49,46,129,0.95),rgba(15,23,42,0.98)_48%,rgba(17,24,39,1))] p-6 text-white shadow-[0_24px_60px_rgba(15,23,42,0.18)]">
+        <div className="grid gap-5 md:grid-cols-3 xl:grid-cols-6">
+          <HeroMetric icon={FileText} label="Total Invoices" value={counts.all} detail="Live invoice records" tone="cyan" />
+          <HeroMetric icon={AlertTriangle} label="Needs Review" value={counts.needs_review} detail="Unresolved review items" tone="amber" />
+          <HeroMetric icon={Search} label="Accounting Review" value={counts.accounting_review} detail="In accounting queue" tone="sky" />
+          <HeroMetric icon={ShieldCheck} label="Approved / Reviewed" value={counts.approved} detail="Ready for reviewed export" tone="emerald" />
+          <HeroMetric icon={FileCheck2} label="OCR Needs Review" value={counts.ocr_needs_review} detail="OCR assisted records" tone="violet" />
+          <HeroMetric icon={CloudUpload} label="Source Documents" value={counts.source_document} detail="Linked PDF records" tone="violet" last />
         </div>
-
-        <aside className="premium-card flex min-h-[164px] flex-col justify-between p-5">
-          <div className="flex items-start justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <span className="grid h-8 w-8 place-items-center rounded-xl bg-indigo-50 text-indigo-600">
-                <Sparkles className="h-4 w-4" />
-              </span>
-              <div>
-                <h2 className="text-sm font-bold text-slate-950">AI Insight</h2>
-                <p className="text-xs text-slate-500">Decision support summary</p>
-              </div>
-            </div>
-            <span className="rounded-full bg-violet-50 px-2.5 py-1 text-xs font-bold text-violet-700 ring-1 ring-violet-200">
-              New
-            </span>
-          </div>
-          <p className="mt-4 text-sm font-medium leading-6 text-slate-700">
-            {counts.needs_review} invoices totaling {formatCurrency(highRiskTotal || 0)} need review before they are included in approved exports.
-          </p>
-          <Link className="secondary-button mt-4 justify-center px-4 py-2 text-indigo-700" href="/ai-brief">
-            <Sparkles className="h-4 w-4" />
-            View AI Insights
-          </Link>
-        </aside>
       </section>
 
       <section className="premium-card p-5">
-        <div className="grid gap-3 xl:grid-cols-[minmax(280px,1fr)_160px_160px_190px_120px_150px]">
+        <div className="grid gap-3 xl:grid-cols-[minmax(280px,1fr)_150px_160px_190px_170px_120px_150px]">
           <label className="relative block">
             <span className="sr-only">Search invoices</span>
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -150,7 +197,7 @@ export function PremiumInvoiceTable({ invoices }: { invoices: Invoice[] }) {
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               className="h-11 w-full rounded-xl border border-slate-200 bg-white pl-10 pr-3 text-sm text-slate-900 outline-none ring-blue-100 placeholder:text-slate-400 focus:ring-4"
-              placeholder="Search by invoice number, customer, or amount..."
+              placeholder="Search invoice, customer, state, status, or amount..."
             />
           </label>
           <FilterSelect value={stateFilter} onChange={setStateFilter} options={states.map((state) => ({ label: state, value: state }))} defaultLabel="All States" />
@@ -161,15 +208,28 @@ export function PremiumInvoiceTable({ invoices }: { invoices: Invoice[] }) {
             options={reviewStatuses.map((status) => ({ label: readable(status), value: status }))}
             defaultLabel="All Review Status"
           />
-          <button className="secondary-button h-11 justify-center px-4" type="button">
-            <Filter className="h-4 w-4" />
-            Filters
+          <FilterSelect
+            value={sortKey}
+            onChange={(value) => setSortKey(value as SortKey)}
+            options={[
+              { label: "Invoice Date", value: "invoice_date" },
+              { label: "Amount", value: "amount" },
+              { label: "Risk", value: "risk" },
+              { label: "Updated Date", value: "updated_date" },
+            ]}
+            defaultLabel="Sort By"
+            includeDefault={false}
+          />
+          <button className="secondary-button h-11 justify-center px-4" type="button" onClick={clearFilters}>
+            <FilterX className="h-4 w-4" />
+            Clear
           </button>
-          <button className="secondary-button h-11 justify-center px-4" type="button">
-            <FileCheck2 className="h-4 w-4" />
-            Saved Views
+          <button className="secondary-button h-11 justify-center px-4" type="button" onClick={saveView}>
+            <CheckCircle2 className="h-4 w-4" />
+            Save View
           </button>
         </div>
+        {savedViewMessage ? <p className="mt-3 text-xs font-medium text-emerald-700">{savedViewMessage}</p> : null}
       </section>
 
       <section className="flex gap-3 overflow-x-auto pb-1">
@@ -201,31 +261,40 @@ export function PremiumInvoiceTable({ invoices }: { invoices: Invoice[] }) {
       </section>
 
       <section className="data-grid overflow-hidden rounded-[1.15rem]">
+        <div className="flex flex-col gap-3 border-b border-slate-200 bg-white px-5 py-4 text-sm text-slate-600 md:flex-row md:items-center md:justify-between">
+          <span>
+            Showing {filteredInvoices.length} of {invoices.length} invoices
+          </span>
+          <span className="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-slate-500">
+            <ArrowUpDown className="h-4 w-4" />
+            Sorted by {readable(sortKey)}
+          </span>
+        </div>
         <div className="overflow-x-auto">
-          <table className="min-w-[1320px] divide-y divide-slate-200 text-sm">
+          <table className="min-w-[1540px] divide-y divide-slate-200 text-sm">
             <thead className="bg-slate-50/90 text-left text-xs font-bold uppercase tracking-wide text-slate-500">
               <tr>
-                <th className="w-12 px-5 py-4">
-                  <input className="h-4 w-4 rounded border-slate-300" type="checkbox" aria-label="Select all invoices" />
-                </th>
-                <th className="px-4 py-4">Invoice Number</th>
+                <th className="px-4 py-4">Invoice</th>
                 <th className="px-4 py-4">Customer</th>
+                <th className="px-4 py-4">Invoice Date</th>
                 <th className="px-4 py-4">Ship To</th>
                 <th className="px-4 py-4">Bill To</th>
-                <th className="px-4 py-4 text-right">Taxable Amount</th>
-                <th className="px-4 py-4">Threshold Impact</th>
-                <th className="px-4 py-4">Source</th>
+                <th className="px-4 py-4 text-right">Total</th>
+                <th className="px-4 py-4 text-right">Taxable</th>
                 <th className="px-4 py-4">Status</th>
-                <th className="px-4 py-4">Review Status</th>
-                <th className="px-4 py-4">Last Updated</th>
-                <th className="w-12 px-4 py-4 text-center">
-                  <span className="sr-only">Actions</span>
-                </th>
+                <th className="px-4 py-4">Review</th>
+                <th className="px-4 py-4">Extraction</th>
+                <th className="px-4 py-4">Source Document</th>
+                <th className="px-4 py-4">Risk</th>
+                <th className="px-4 py-4">Threshold Impact</th>
+                <th className="px-4 py-4">Next Action</th>
+                <th className="px-4 py-4">Updated</th>
+                <th className="px-4 py-4">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 bg-white">
               {filteredInvoices.map((invoice) => (
-                <InvoiceRow key={invoice.id} invoice={invoice} />
+                <InvoiceRow key={invoice.id} invoice={invoice} invoices={invoices} rules={rules} />
               ))}
             </tbody>
           </table>
@@ -236,100 +305,91 @@ export function PremiumInvoiceTable({ invoices }: { invoices: Invoice[] }) {
             <div className="mx-auto grid h-12 w-12 place-items-center rounded-2xl bg-slate-100 text-slate-500">
               <Search className="h-5 w-5" />
             </div>
-            <h3 className="mt-4 text-sm font-bold text-slate-950">No invoices match this view</h3>
-            <p className="mt-1 text-sm text-slate-500">Clear a filter or search for a different invoice number.</p>
+            <h3 className="mt-4 text-sm font-bold text-slate-950">
+              {invoices.length === 0 ? "No live invoices yet." : "No invoices match this filter."}
+            </h3>
+            <p className="mt-1 text-sm text-slate-500">
+              {invoices.length === 0 ? "No invoices yet. Upload or enter an invoice to begin monitoring." : "Clear filters or search for a different invoice."}
+            </p>
           </div>
         ) : null}
-
-        <div className="flex flex-col gap-3 border-t border-slate-200 bg-white px-5 py-4 text-sm text-slate-600 md:flex-row md:items-center md:justify-between">
-          <span>
-            Showing 1 to {filteredInvoices.length} of {filteredInvoices.length} invoices
-          </span>
-          <div className="flex flex-wrap items-center gap-3">
-            <button className="secondary-button px-3 py-2" type="button">
-              25 per page
-              <ChevronDown className="h-4 w-4" />
-            </button>
-            <div className="flex items-center gap-1">
-              {[1, 2, 3, 4, 5].map((page) => (
-                <button
-                  key={page}
-                  className={`grid h-9 w-9 place-items-center rounded-lg text-sm font-bold ${
-                    page === 1 ? "bg-indigo-600 text-white shadow-sm" : "text-slate-600 hover:bg-slate-100"
-                  }`}
-                  type="button"
-                >
-                  {page}
-                </button>
-              ))}
-            </div>
-          </div>
-        </div>
       </section>
     </div>
   );
 }
 
-function InvoiceRow({ invoice }: { invoice: Invoice }) {
-  const impact = getImpactPercent(invoice);
-  const isHero = invoice.invoiceNumber === "INV-1048" || invoice.flags.includes("may_cross_threshold");
+function InvoiceRow({ invoice, invoices, rules }: { invoice: Invoice; invoices: Invoice[]; rules: NexusRule[] }) {
+  const impact = buildInvoiceThresholdImpact(invoice, invoices, rules);
+  const sourceLinked = hasSourceDocument(invoice);
   const SourceIcon = getSourceIcon(invoice);
+  const thresholdUnavailable = !invoice.shipToState || impact.thresholdAmount <= 0;
 
   return (
-    <tr className={`transition hover:bg-slate-50 ${isHero ? "bg-red-50/45" : ""}`}>
-      <td className="px-5 py-4">
-        <input className="h-4 w-4 rounded border-slate-300" type="checkbox" aria-label={`Select ${invoice.invoiceNumber}`} />
-      </td>
+    <tr className={`transition hover:bg-slate-50 ${impact.thresholdStatus === "crossed" ? "bg-red-50/35" : ""}`}>
       <td className="px-4 py-4">
         <Link className="font-bold text-blue-700 hover:text-blue-900" href={`/invoices/${invoice.id}`}>
           {invoice.invoiceNumber}
         </Link>
-        {isHero ? (
+        {impact.thresholdCrossingRisk ? (
           <div className="mt-1 w-fit rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-bold text-red-700 ring-1 ring-red-200">
-            May Push Threshold
+            Crossing risk
           </div>
         ) : null}
       </td>
       <td className="px-4 py-4">
-        <div className="font-bold text-slate-950">{invoice.customerName}</div>
+        <div className="font-bold text-slate-950">{invoice.customerName || "Missing customer"}</div>
         <div className="mt-0.5 text-xs text-slate-500">{customerId(invoice)}</div>
       </td>
-      <td className="px-4 py-4 text-slate-700">
-        <div>{invoice.customerName}</div>
-        <div className="text-xs text-slate-500">{stateLabel(invoice.shipToState)}</div>
-      </td>
-      <td className="px-4 py-4 text-slate-700">
-        <div>{invoice.customerName}</div>
-        <div className="text-xs text-slate-500">{stateLabel(invoice.billToState)}</div>
-      </td>
+      <td className="px-4 py-4 text-slate-700">{formatDate(invoice.invoiceDate)}</td>
+      <td className="px-4 py-4 text-slate-700">{stateLabel(invoice.shipToState)}</td>
+      <td className="px-4 py-4 text-slate-700">{stateLabel(invoice.billToState)}</td>
+      <td className="px-4 py-4 text-right font-semibold text-slate-800">{formatCurrency(invoice.totalAmount)}</td>
       <td className="px-4 py-4 text-right font-bold text-slate-950">{formatCurrency(invoice.taxableAmount)}</td>
       <td className="px-4 py-4">
-        <ThresholdPill state={invoice.shipToState} percent={impact} risk={invoice.riskStatus} />
-      </td>
-      <td className="px-4 py-4">
-        <span className="inline-flex items-center gap-2 text-slate-700">
-          <SourceIcon className="h-4 w-4 text-indigo-500" />
-          {getSourceLabel(invoice)}
-        </span>
-      </td>
-      <td className="px-4 py-4">
-        <OperationalPill value={invoice.reviewStatus === "draft" ? "Draft" : "Posted"} tone={invoice.reviewStatus === "draft" ? "slate" : "green"} />
+        <OperationalPill value={readable(getOperationalStatus(invoice))} tone={getOperationalStatus(invoice) === "draft" ? "slate" : "green"} />
       </td>
       <td className="px-4 py-4">
         <StatusBadge status={invoice.reviewStatus} />
       </td>
-      <td className="px-4 py-4 text-slate-700">
-        <div>{formatDate(invoice.invoiceDate)}</div>
-        <div className="text-xs text-slate-500">Invoice activity</div>
+      <td className="px-4 py-4">
+        {invoice.extractionStatus ? <StatusBadge status={invoice.extractionStatus} /> : <span className="text-xs text-slate-500">No extraction status</span>}
       </td>
-      <td className="px-4 py-4 text-center">
-        <Link
-          className="inline-grid h-9 w-9 place-items-center rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-900"
-          href={`/invoices/${invoice.id}`}
-          aria-label={`Open ${invoice.invoiceNumber}`}
-        >
-          <MoreVertical className="h-4 w-4" />
-        </Link>
+      <td className="px-4 py-4">
+        <span className="inline-flex items-center gap-2 text-slate-700">
+          <SourceIcon className="h-4 w-4 text-indigo-500" />
+          {sourceLinked ? getSourceLabel(invoice) : "No source document linked"}
+        </span>
+      </td>
+      <td className="px-4 py-4">
+        <div className="flex flex-wrap gap-1.5">
+          <StatusBadge status={impact.riskStatus} />
+          {invoice.flags.slice(0, 2).map((flag) => (
+            <StatusBadge key={flag} status={flag} />
+          ))}
+          {isOcrReviewInvoice(invoice) ? <StatusBadge status="ocr_needs_review" /> : null}
+        </div>
+      </td>
+      <td className="px-4 py-4">
+        {thresholdUnavailable ? (
+          <span className="text-xs font-medium text-slate-500">Threshold preview unavailable. Review invoice fields and state rule.</span>
+        ) : (
+          <ThresholdPill state={invoice.shipToState} percent={impact.percentAfterInvoice} status={impact.thresholdStatus} />
+        )}
+      </td>
+      <td className="px-4 py-4 text-sm font-medium text-slate-700">{impact.recommendedNextAction}</td>
+      <td className="px-4 py-4 text-slate-700">
+        <div>{formatDate(getInvoiceActivityDate(invoice))}</div>
+        <div className="text-xs text-slate-500">{invoice.updatedAt ? "Updated" : invoice.createdAt ? "Created" : "Invoice activity"}</div>
+      </td>
+      <td className="px-4 py-4">
+        <div className="flex items-center gap-2">
+          <Link className="secondary-button px-3 py-2 text-xs" href={`/invoices/${invoice.id}`}>
+            View Invoice
+          </Link>
+          <Link className="secondary-button px-3 py-2 text-xs" href={`/exports?invoice=${encodeURIComponent(invoice.invoiceNumber)}`}>
+            Export
+          </Link>
+        </div>
       </td>
     </tr>
   );
@@ -359,7 +419,7 @@ function HeroMetric({
   }[tone];
 
   return (
-    <div className={`flex gap-4 ${last ? "" : "md:border-r md:border-white/15 md:pr-5"}`}>
+    <div className={`flex gap-4 ${last ? "" : "xl:border-r xl:border-white/15 xl:pr-5"}`}>
       <Icon className={`mt-1 h-8 w-8 shrink-0 ${toneClass}`} />
       <div>
         <div className="text-3xl font-black tracking-tight">{value.toLocaleString()}</div>
@@ -370,18 +430,11 @@ function HeroMetric({
   );
 }
 
-function ThresholdPill({
-  state,
-  percent,
-  risk,
-}: {
-  state?: string | null;
-  percent: number;
-  risk: Invoice["riskStatus"];
-}) {
-  const crossed = risk === "crossed" || percent >= 100;
-  const warning = risk === "warning" || percent >= 90;
-  const watch = risk === "watch" || percent >= 75;
+function ThresholdPill({ state, percent, status }: { state?: string | null; percent: number; status: string }) {
+  const safePercent = Number.isFinite(percent) ? percent : 0;
+  const crossed = status === "crossed" || safePercent >= 100;
+  const warning = status === "warning" || safePercent >= 90;
+  const watch = status === "watch" || safePercent >= 75;
   const tone = crossed
     ? "bg-red-50 text-red-700 ring-red-200"
     : warning
@@ -392,8 +445,7 @@ function ThresholdPill({
 
   return (
     <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-bold ring-1 ring-inset ${tone}`}>
-      {stateLabel(state)} {formatPercent(percent)}
-      <span aria-hidden="true">↗</span>
+      {stateLabel(state)} {formatPercent(safePercent)}
     </span>
   );
 }
@@ -417,11 +469,13 @@ function FilterSelect({
   onChange,
   options,
   defaultLabel,
+  includeDefault = true,
 }: {
   value: string;
   onChange: (value: string) => void;
   options: { label: string; value: string }[];
   defaultLabel: string;
+  includeDefault?: boolean;
 }) {
   return (
     <label className="relative block">
@@ -431,7 +485,7 @@ function FilterSelect({
         onChange={(event) => onChange(event.target.value)}
         className="h-11 w-full appearance-none rounded-xl border border-slate-200 bg-white px-4 pr-9 text-sm font-medium text-slate-800 outline-none ring-blue-100 focus:ring-4"
       >
-        <option value="all">{defaultLabel}</option>
+        {includeDefault ? <option value="all">{defaultLabel}</option> : null}
         {options.map((option) => (
           <option key={option.value} value={option.value}>
             {option.label}
@@ -443,17 +497,24 @@ function FilterSelect({
   );
 }
 
-function segmentMatches(invoice: Invoice, segment: Segment) {
+function segmentMatches(invoice: Invoice, segment: Segment, thresholdStatus: string, invoices: Invoice[], rules: NexusRule[]) {
   if (segment === "all") return true;
-  if (segment === "ocr_needs_review") return invoice.extractionStatus === "ocr_needs_review";
-  if (segment === "approved") return invoice.reviewStatus === "approved" || invoice.reviewStatus === "exported";
-  if (segment === "needs_review") return invoice.reviewStatus === "needs_review" || invoice.flags.length > 0;
-  return invoice.reviewStatus === segment;
+  if (segment === "draft") return isDraftInvoice(invoice);
+  if (segment === "needs_review") return isReviewQueueInvoice(invoice);
+  if (segment === "accounting_review") return invoice.reviewStatus === "accounting_review";
+  if (segment === "approved") return isReviewedInvoice(invoice);
+  if (segment === "ocr_needs_review") return isOcrReviewInvoice(invoice);
+  if (segment === "source_document") return hasSourceDocument(invoice);
+  if (segment === "missing_fields") return isMissingFieldInvoice(invoice);
+  if (segment === "threshold_warning") return isThresholdWarningInvoice(invoice, invoices, rules);
+  if (segment === "crossed") return thresholdStatus === "crossed";
+  if (segment === "large_invoice") return isLargeInvoice(invoice);
+  return hasUnknownCategory(invoice);
 }
 
 function getSourceLabel(invoice: Invoice) {
   if (invoice.extractionStatus === "ocr_needs_review") return "OCR Extract";
-  if (invoice.documentId || invoice.pdfFileName || invoice.pdfPublicUrl) return "PDF Upload";
+  if (hasSourceDocument(invoice)) return "PDF Upload";
   if (invoice.sourceType === "paste") return "Paste Text";
   if (invoice.sourceType === "pdf_preview") return "PDF Upload";
   return "Manual Entry";
@@ -467,12 +528,23 @@ function getSourceIcon(invoice: Invoice) {
   return UploadCloud;
 }
 
-function getImpactPercent(invoice: Invoice) {
-  if (invoice.invoiceNumber === "INV-1048") return 118.2;
-  if (invoice.riskStatus === "crossed") return 118.2;
-  if (invoice.riskStatus === "warning") return 96;
-  if (invoice.riskStatus === "watch") return 82.6;
-  return STATE_IMPACT[invoice.shipToState ?? ""] ?? 36.9;
+function compareInvoices(
+  a: { invoice: Invoice; impact: ReturnType<typeof buildInvoiceThresholdImpact> },
+  b: { invoice: Invoice; impact: ReturnType<typeof buildInvoiceThresholdImpact> },
+  sortKey: SortKey
+) {
+  if (sortKey === "amount") return b.invoice.totalAmount - a.invoice.totalAmount;
+  if (sortKey === "risk") return riskRank(b.impact) - riskRank(a.impact);
+  if (sortKey === "updated_date") return getInvoiceActivityDate(b.invoice).localeCompare(getInvoiceActivityDate(a.invoice));
+  return (b.invoice.invoiceDate || "").localeCompare(a.invoice.invoiceDate || "");
+}
+
+function riskRank(impact: ReturnType<typeof buildInvoiceThresholdImpact>) {
+  if (impact.thresholdStatus === "crossed" || impact.thresholdCrossingRisk) return 4;
+  if (impact.warning90) return 3;
+  if (impact.watch75) return 2;
+  if (impact.riskReasons.length) return 1;
+  return 0;
 }
 
 function customerId(invoice: Invoice) {

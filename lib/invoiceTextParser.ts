@@ -40,7 +40,7 @@ const FIELD_PATTERNS = {
   invoiceNumber: /(?:invoice\s*(?:number|no\.?|#)|inv\s*(?:no\.?|#))\s*[:#-]?\s*([A-Z0-9][A-Z0-9._-]{2,})/i,
   invoiceDate: /(?:invoice\s*date|date)\s*[:#-]?\s*([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4}|[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2})/i,
   dueDate: /(?:due\s*date|payment\s*due)\s*[:#-]?\s*([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4}|[A-Za-z]{3,9}\s+\d{1,2},?\s+\d{4}|\d{4}-\d{2}-\d{2})/i,
-  customerName: /(?:customer|client|sold\s*to)\s*[:#-]?\s*(.+)/i,
+  customerName: /(?:^|\n)(?:customer(?!\s+(?:segment|message))|client|sold\s*to)\s*[:#-]?\s*([^\n]+)/i,
   subtotal: /(?:subtotal)\s*[:#-]?\s*\$?\s*([-\d,]+(?:\.\d{2})?)/i,
   totalAmount: /(?:total\s*(?:amount|due)?|amount\s*due|balance\s*due)\s*[:#-]?\s*\$?\s*([-\d,]+(?:\.\d{2})?)/i,
 };
@@ -79,8 +79,9 @@ export function parseInvoiceText(text: string): ParsedInvoiceText {
   const customerName = cleanName(matchField(normalized, FIELD_PATTERNS.customerName));
   const subtotal = parseMoney(matchField(normalized, FIELD_PATTERNS.subtotal));
   const totalAmount = parseMoney(matchField(normalized, FIELD_PATTERNS.totalAmount)) ?? subtotal;
-  const billToBlock = extractAddressBlock(lines, ["bill to", "billing"]);
-  const shipToBlock = extractAddressBlock(lines, ["ship to", "shipping"]);
+  const sideBySideBlocks = extractSideBySideAddressBlocks(lines);
+  const billToBlock = sideBySideBlocks.billTo.length ? sideBySideBlocks.billTo : extractAddressBlock(lines, ["bill to", "billing"]);
+  const shipToBlock = sideBySideBlocks.shipTo.length ? sideBySideBlocks.shipTo : extractAddressBlock(lines, ["ship to", "shipping"]);
   const billToState = findStateCode(billToBlock.join(" "));
   const shipToState = findStateCode(shipToBlock.join(" "));
   const lineItems = extractLineItems(lines);
@@ -157,10 +158,17 @@ function extractLineItems(lines: string[]) {
     const moneyMatches = Array.from(line.matchAll(/\$?\s*(-?\d[\d,]*(?:\.\d{2})?)/g));
     if (!moneyMatches.length) continue;
 
-    const amount = parseMoney(moneyMatches[moneyMatches.length - 1][1]);
+    const amountMatch = moneyMatches.length >= 4 ? moneyMatches[moneyMatches.length - 2] : moneyMatches[moneyMatches.length - 1];
+    const amount = parseMoney(amountMatch[1]);
     if (amount == null) continue;
 
-    const description = line.slice(0, moneyMatches[moneyMatches.length - 1].index).replace(/\s{2,}/g, " ").trim();
+    const explicitTaxableAmount = moneyMatches.length >= 4 ? parseMoney(moneyMatches[moneyMatches.length - 1][1]) : undefined;
+    const description = line
+      .slice(0, moneyMatches[0].index)
+      .replace(/^[A-Z0-9]{2,}(?:-[A-Z0-9][A-Z0-9-]*)+/i, "")
+      .replace(/\b(saas|hardware|services|other)$/i, "")
+      .replace(/\s{2,}/g, " ")
+      .trim();
     if (!description || description.length < 3) continue;
     if (looksLikeAddressOrSummary(description)) continue;
 
@@ -174,12 +182,65 @@ function extractLineItems(lines: string[]) {
       rate,
       amount,
       category: detected.category,
-      taxableAmount: detected.category === "unknown" ? 0 : amount,
-      taxabilityReason: detected.reason,
+      taxableAmount: explicitTaxableAmount ?? (detected.category === "unknown" ? 0 : amount),
+      taxabilityReason: explicitTaxableAmount != null ? "Used taxable amount detected from PDF table." : detected.reason,
     });
   }
 
-  return items.slice(0, 20);
+  return (items.length ? items : extractStackedLineItems(candidateLines)).slice(0, 20);
+}
+
+function extractStackedLineItems(lines: string[]) {
+  const groups: string[][] = [];
+  let current: string[] = [];
+
+  for (const line of lines) {
+    if (/^(subtotal|total|invoice total|sales tax|taxable amount|customer message|nexuswatch test note|review guardrail)\b/i.test(line)) break;
+    if (looksLikeItemCode(line)) {
+      if (current.length) groups.push(current);
+      current = [line];
+      continue;
+    }
+    if (current.length) current.push(line);
+  }
+  if (current.length) groups.push(current);
+
+  return groups
+    .map((group) => stackedGroupToLineItem(group))
+    .filter((item): item is ParsedInvoiceLineItem => Boolean(item));
+}
+
+function stackedGroupToLineItem(group: string[]) {
+  const categoryLine = group.find((line) => /^(saas|hardware|services|other)$/i.test(line));
+  const category = categoryLine ? detectCategory(categoryLine).category : "unknown";
+  const moneyValues = group
+    .map((line) => parseMoney(line))
+    .filter((amount): amount is number => amount != null);
+  if (!moneyValues.length) return null;
+
+  const amount = moneyValues.length >= 2 ? moneyValues[moneyValues.length - 2] : moneyValues[moneyValues.length - 1];
+  const explicitTaxableAmount = moneyValues.length >= 2 ? moneyValues[moneyValues.length - 1] : undefined;
+  const descriptionLines = group
+    .slice(1)
+    .filter((line) => !/^(saas|hardware|services|other)$/i.test(line))
+    .filter((line) => parseMoney(line) == null)
+    .filter((line) => !/^-?\d+(?:\.\d+)?$/.test(line))
+    .filter((line) => !looksLikeAddressOrSummary(line));
+  const description = descriptionLines.join(" ").replace(/\s{2,}/g, " ").trim();
+  if (!description) return null;
+
+  const detected = detectCategory(`${description} ${categoryLine ?? ""}`);
+  return {
+    description,
+    amount,
+    category: category === "unknown" ? detected.category : category,
+    taxableAmount: explicitTaxableAmount ?? (detected.category === "unknown" ? 0 : amount),
+    taxabilityReason: explicitTaxableAmount != null ? "Used taxable amount detected from PDF table." : detected.reason,
+  };
+}
+
+function looksLikeItemCode(line: string) {
+  return /^[A-Z0-9]{2,}(?:-[A-Z0-9][A-Z0-9-]*)+$/i.test(line);
 }
 
 function lineItemSection(lines: string[]) {
@@ -266,6 +327,59 @@ function extractAddressBlock(lines: string[], labels: string[]) {
   }
 
   return block.filter(Boolean);
+}
+
+function extractSideBySideAddressBlocks(lines: string[]) {
+  const empty = { billTo: [] as string[], shipTo: [] as string[] };
+  const headerIndex = lines.findIndex((line) => /\bbill to\b/i.test(line) && /\bship to\b/i.test(line) && line.includes("\t"));
+  if (headerIndex === -1) return empty;
+
+  const billTo: string[] = [];
+  const shipTo: string[] = [];
+  for (const line of lines.slice(headerIndex + 1, headerIndex + 8)) {
+    if (/^(memo|item code|description|subtotal|total)\b/i.test(line)) break;
+    const columns = line
+      .split("\t")
+      .map((column) => column.trim())
+      .filter(Boolean);
+    const splitColumns = columns.length >= 2 && !hasTwoStateZipPairs(columns[0]) ? columns : splitSideBySideAddressLine(columns[0] ?? line);
+    if (splitColumns.length < 2) continue;
+    if (!looksLikeAddressColumn(splitColumns[0]) && !looksLikeAddressColumn(splitColumns[1])) continue;
+    billTo.push(splitColumns[0]);
+    shipTo.push(splitColumns[1]);
+  }
+
+  return {
+    billTo: trimAddressBlock(billTo),
+    shipTo: trimAddressBlock(shipTo),
+  };
+}
+
+function looksLikeAddressColumn(value: string) {
+  return !/:/.test(value) || /\b[A-Z]{2}\s+\d{5}(?:-\d{4})?\b/.test(value);
+}
+
+function splitSideBySideAddressLine(line: string) {
+  const stateZip = line.match(/^(.+?\b[A-Z]{2}\s+\d{5}(?:-\d{4})?)\s+(.+?\b[A-Z]{2}\s+\d{5}(?:-\d{4})?)$/);
+  if (stateZip) return [stateZip[1], stateZip[2]];
+
+  const street = line.match(/^(.+?\b(?:Street|St\.?|Avenue|Ave\.?|Road|Rd\.?|Parkway|Way|Drive|Dr\.?|Lane|Ln\.?|Boulevard|Blvd\.?))\s+(.+)$/i);
+  if (street) return [street[1], street[2]];
+
+  const name = line.match(/^(.+?\b(?:HQ|Inc\.?|LLC|Corp(?:oration)?|Company|Co\.?|Group))\s+(.+)$/i);
+  if (name) return [name[1], name[2]];
+
+  return [];
+}
+
+function hasTwoStateZipPairs(value: string) {
+  return (value.match(/\b[A-Z]{2}\s+\d{5}(?:-\d{4})?\b/g) ?? []).length >= 2;
+}
+
+function trimAddressBlock(block: string[]) {
+  return block
+    .filter((line) => !/^(po number|currency|account rep|customer segment|project|class|location|quickbooks|memo)\b/i.test(line))
+    .slice(0, 5);
 }
 
 function findStateCode(value: string) {

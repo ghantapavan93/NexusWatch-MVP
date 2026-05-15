@@ -28,7 +28,10 @@ type PdfUpload = {
   publicUrl?: string;
   contentType?: string;
   size?: number;
+  extractedText?: string;
   extractionStatus: "manual_review_required" | "extracted_needs_review" | "ocr_needs_review" | "extraction_failed";
+  extractionMethod?: "pdf_text" | "ocr" | "manual_review";
+  ocrConfidence?: number | null;
   detectedFields?: ParsedInvoiceText;
   unknownFields?: Record<string, unknown>;
   fieldConfidence?: Record<string, unknown>;
@@ -119,6 +122,19 @@ export default function UploadPage() {
     ]);
   }
 
+  function addReviewLineItem() {
+    setLineItems((items) => [
+      ...items,
+      {
+        id: `review-line-${Date.now()}`,
+        description: "Unrecognized line item",
+        category: "other",
+        amount: "0",
+      },
+    ]);
+    setActionMessage("Review row added. Set the description, amount, and category before saving.");
+  }
+
   function removeLineItem(id: string) {
     setLineItems((items) => (items.length === 1 ? items : items.filter((item) => item.id !== id)));
   }
@@ -147,6 +163,7 @@ export default function UploadPage() {
         fileName?: string;
         storagePath?: string;
         publicUrl?: string;
+        extractedText?: string;
         extractionStatus?: PdfUpload["extractionStatus"];
         detectedFields?: ParsedInvoiceText;
         unknownFields?: Record<string, unknown>;
@@ -164,6 +181,7 @@ export default function UploadPage() {
               publicUrl: result.publicUrl,
               contentType: "application/pdf",
               size: pdfFile.size,
+              extractedText: result.extractedText,
               extractionStatus: result.extractionStatus,
               detectedFields: result.detectedFields,
               unknownFields: result.unknownFields,
@@ -178,12 +196,19 @@ export default function UploadPage() {
       }
 
       setUploadedPdf(uploaded);
-      setActionMessage(result.message ?? "PDF uploaded and linked for manual review.");
-      setToastMessage(
-        uploaded.detectedFields
-          ? "PDF uploaded. Fields detected for manual review."
-          : "PDF uploaded and linked for manual review."
-      );
+      if (uploaded.extractedText) {
+        setPastedText(uploaded.extractedText);
+      }
+      if (uploaded.detectedFields) {
+        await applyDetectedFields("pdf_text", uploaded.detectedFields);
+        setActionMessage(
+          `${result.message ?? "PDF uploaded and linked."} Detected fields were copied into manual entry and line items for review.`
+        );
+        setToastMessage("PDF uploaded. Detected fields copied into manual entry.");
+      } else {
+        setActionMessage(result.message ?? "PDF uploaded and linked for manual review.");
+        setToastMessage("PDF uploaded and linked for manual review.");
+      }
     } catch {
       setActionMessage("PDF could not be uploaded. Check the local server and Supabase Storage setup.");
     } finally {
@@ -251,6 +276,7 @@ export default function UploadPage() {
             : `Invoice ${invoiceNumber} updated without creating a duplicate.`
           : `Invoice ${result.invoice?.invoiceNumber ?? invoiceNumber} saved to Supabase.`
       );
+      rememberLiveInvoice(result.invoice?.invoiceNumber ?? invoiceNumber);
       setSavedInvoiceId(result.invoice?.id ?? savedInvoiceId);
       if (result.invoice?.id || result.invoice?.invoiceNumber) {
         router.refresh();
@@ -330,12 +356,31 @@ export default function UploadPage() {
     };
   }
 
+  function rememberLiveInvoice(savedInvoiceNumber: string) {
+    const normalizedInvoiceNumber = savedInvoiceNumber.trim();
+    if (!normalizedInvoiceNumber) return;
+    const existing = getCookieValue("nexuswatch_live_invoice_numbers")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    const next = Array.from(new Set([normalizedInvoiceNumber, ...existing])).slice(0, 50);
+    document.cookie = "nexuswatch_data_mode=live; path=/; max-age=31536000; samesite=lax";
+    document.cookie = `nexuswatch_live_invoice_numbers=${encodeURIComponent(next.join(","))}; path=/; max-age=31536000; samesite=lax`;
+  }
+
+  function getCookieValue(name: string) {
+    const entry = document.cookie
+      .split("; ")
+      .find((cookie) => cookie.startsWith(`${name}=`));
+    return entry ? decodeURIComponent(entry.split("=").slice(1).join("=")) : "";
+  }
+
   return (
     <>
       <Toast message={toastMessage} onClose={() => setToastMessage("")} />
       <PageHeader
         title="Upload Invoice"
-        description="Manual invoice intake for privacy-first review. Email scanning and QuickBooks integrations remain future roadmap items."
+        description="Manual, pasted text, and PDF/OCR intake. Saved invoices switch Dashboard and Invoices into Live Mode for Sara's uploaded records."
       />
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_390px]">
@@ -415,7 +460,9 @@ export default function UploadPage() {
                   </a>
                 ) : null}
                 <p className="mt-4 rounded-xl bg-blue-50 p-3 text-sm leading-6 text-blue-800">
-                  PDF uploaded and linked. NexusWatch checks embedded PDF text first, then uses OCR for scanned PDFs when possible. Manual review remains required.
+                  {uploadedPdf
+                    ? "PDF uploaded and linked. NexusWatch checks embedded PDF text first, then uses OCR for scanned PDFs when possible. Manual review remains required."
+                    : "Choose a PDF invoice, then click Upload PDF. NexusWatch checks embedded PDF text first, then uses OCR for scanned PDFs when possible."}
                 </p>
                 {uploadedPdf?.detectedFields ? (
                   <ExtractedFieldsPreview
@@ -451,6 +498,51 @@ export default function UploadPage() {
             </div>
           </section>
 
+          {uploadedPdf ? (
+            <section className="premium-card p-5">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+                    <h2 className="text-sm font-semibold text-slate-950">Source Document Linked</h2>
+                  </div>
+                  <p className="mt-2 text-sm leading-6 text-slate-600">
+                    {uploadedPdf.fileName} is attached to this draft. Detected PDF/OCR fields have been copied into the manual form and line items for review.
+                  </p>
+                </div>
+                {uploadedPdf.publicUrl ? (
+                  <a
+                    href={uploadedPdf.publicUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center justify-center rounded-md border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                  >
+                    Open PDF
+                  </a>
+                ) : null}
+              </div>
+              <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                <TotalBox label="Extraction status" value={formatStatusLabel(uploadedPdf.extractionStatus)} />
+                <TotalBox label="Extraction method" value={formatStatusLabel(uploadedPdf.extractionMethod ?? "manual_review")} />
+                <TotalBox label="OCR confidence" value={formatConfidence(uploadedPdf.ocrConfidence)} />
+              </div>
+              {uploadedPdf.extractedText ? (
+                <details className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
+                  <summary className="cursor-pointer font-semibold text-slate-900">View extracted source text</summary>
+                  <pre className="mt-3 max-h-48 overflow-auto whitespace-pre-wrap text-xs leading-5 text-slate-600">
+                    {uploadedPdf.extractedText}
+                  </pre>
+                </details>
+              ) : (
+                <p className="mt-4 rounded-xl bg-amber-50 p-3 text-sm text-amber-800">
+                  PDF text was not confidently extracted. {uploadedPdf.validationWarnings?.[0] ? `Reason: ${uploadedPdf.validationWarnings[0]} ` : ""}
+                  Use the manual fields and add review rows for anything missing.
+                </p>
+              )}
+              {uploadedPdf.validationWarnings?.length ? <WarningList warnings={uploadedPdf.validationWarnings} /> : null}
+            </section>
+          ) : null}
+
           <section className="premium-card p-5">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-semibold text-slate-950">Manual Entry</h2>
@@ -480,17 +572,27 @@ export default function UploadPage() {
               <div>
                 <h2 className="text-sm font-semibold text-slate-950">Line Items</h2>
                 <p className="mt-1 text-sm text-slate-500">
-                  Taxable total is calculated from the selected ship-to state demo rule.
+                  Taxable total is calculated from the selected ship-to state configured rule.
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={addLineItem}
-                className="inline-flex items-center justify-center gap-2 secondary-button px-3 py-2 text-sm"
-              >
-                <Plus className="h-4 w-4" />
-                Add row
-              </button>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={addReviewLineItem}
+                  className="inline-flex items-center justify-center gap-2 secondary-button px-3 py-2 text-sm"
+                >
+                  <AlertTriangle className="h-4 w-4" />
+                  Add review row
+                </button>
+                <button
+                  type="button"
+                  onClick={addLineItem}
+                  className="inline-flex items-center justify-center gap-2 secondary-button px-3 py-2 text-sm"
+                >
+                  <Plus className="h-4 w-4" />
+                  Add row
+                </button>
+              </div>
             </div>
 
             <div className="mt-5 overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -560,7 +662,7 @@ export default function UploadPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setActionMessage("Impact preview refreshed from local demo rules.")}
+                  onClick={() => setActionMessage("Impact preview refreshed from configured state rules.")}
                   className="primary-button px-3 py-2 text-sm"
                 >
                   Preview Impact
@@ -937,8 +1039,20 @@ function WarningList({ warnings }: { warnings: string[] }) {
 }
 
 function parseAmount(value: string) {
-  const parsed = Number(value);
+  const parsed = Number(value.replace(/[$,]/g, "").trim());
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function formatStatusLabel(value: string) {
+  return value
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function formatConfidence(value?: number | null) {
+  if (value == null || !Number.isFinite(value)) return "Review";
+  return `${Math.round(value <= 1 ? value * 100 : value)}%`;
 }
 
 type DetectedRecord = ParsedInvoiceText & Record<string, unknown>;

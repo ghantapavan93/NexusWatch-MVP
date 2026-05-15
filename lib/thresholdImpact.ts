@@ -1,6 +1,6 @@
 import { LARGE_INVOICE_AMOUNT } from "@/lib/constants";
 import { getExcludedAmount, getThresholdStatus, isLineTaxable, previewInvoiceImpact, shouldSkipInvoiceFromThreshold } from "@/lib/nexus";
-import type { Invoice, NexusRule, ReviewFlag, ThresholdStatus } from "@/types";
+import type { Invoice, NexusRule, OperationalStatus, ReviewFlag, ThresholdStatus } from "@/types";
 
 export type ExecutiveRiskStatus = "healthy" | "watch" | "warning" | "review_needed" | "accounting_review" | "approved";
 
@@ -83,13 +83,13 @@ export function buildInvoiceThresholdImpact(invoice: Invoice, invoices: Invoice[
 
 export function buildStateExposureDetails(rule: NexusRule, invoices: Invoice[]) {
   const stateInvoices = invoices.filter((invoice) => invoice.shipToState === rule.stateCode);
-  const approvedInvoices = stateInvoices.filter(
-    (invoice) =>
-      !shouldSkipInvoiceFromThreshold(invoice) &&
-      (invoice.reviewStatus === "approved" || invoice.reviewStatus === "exported")
-  );
-  const reviewInvoices = stateInvoices.filter((invoice) => invoice.reviewStatus === "needs_review" || invoice.flags.length > 0);
+  const approvedInvoices = stateInvoices.filter((invoice) => !shouldSkipInvoiceFromThreshold(invoice) && isReviewedInvoice(invoice));
+  const reviewInvoices = stateInvoices.filter((invoice) => isReviewQueueInvoice(invoice));
   const accountingInvoices = stateInvoices.filter((invoice) => invoice.reviewStatus === "accounting_review");
+  const ocrNeedsReviewInvoices = stateInvoices.filter((invoice) => isOcrReviewInvoice(invoice));
+  const sourceDocumentInvoices = stateInvoices.filter((invoice) => hasSourceDocument(invoice));
+  const missingFieldInvoices = stateInvoices.filter((invoice) => isMissingFieldInvoice(invoice));
+  const unknownCategoryInvoices = stateInvoices.filter((invoice) => hasUnknownCategory(invoice));
   const taxableTotal = approvedInvoices.reduce((sum, invoice) => sum + invoice.taxableAmount, 0);
   const status = getThresholdStatus(taxableTotal, rule.thresholdAmount);
   const highestRiskInvoice = [...stateInvoices].sort((a, b) => {
@@ -107,9 +107,84 @@ export function buildStateExposureDetails(rule: NexusRule, invoices: Invoice[]) 
     reviewCount: reviewInvoices.length,
     approvedCount: approvedInvoices.length,
     accountingCount: accountingInvoices.length,
+    ocrNeedsReviewCount: ocrNeedsReviewInvoices.length,
+    sourceDocumentCount: sourceDocumentInvoices.length,
+    missingFieldCount: missingFieldInvoices.length,
+    unknownCategoryCount: unknownCategoryInvoices.length,
+    inReviewCount: reviewInvoices.length,
+    watch75: status.percent >= 75,
+    warning90: status.percent >= 90,
+    crossed: status.status === "crossed",
     highestRiskInvoice,
-    nextAction: getStateNextAction(status.status, reviewInvoices.length, accountingInvoices.length),
+    nextAction: getStateNextAction(status.status, reviewInvoices.length, accountingInvoices.length, ocrNeedsReviewInvoices.length),
   };
+}
+
+export function hasSourceDocument(invoice: Invoice) {
+  return Boolean(invoice.documentId || invoice.pdfFileName || invoice.pdfPublicUrl || invoice.sourceDocument);
+}
+
+export function isReviewedInvoice(invoice: Invoice) {
+  return invoice.reviewStatus === "approved" || invoice.reviewStatus === "exported";
+}
+
+export function isDraftInvoice(invoice: Invoice) {
+  return invoice.reviewStatus === "draft" || getOperationalStatus(invoice) === "draft";
+}
+
+export function isOcrReviewInvoice(invoice: Invoice) {
+  return invoice.extractionStatus === "ocr_needs_review" || hasLowConfidence(invoice);
+}
+
+export function isManualReviewInvoice(invoice: Invoice) {
+  return invoice.extractionStatus === "manual_review_required" || invoice.extractionStatus === "extracted_needs_review";
+}
+
+export function isReviewQueueInvoice(invoice: Invoice) {
+  if (isReviewedInvoice(invoice) || isDraftInvoice(invoice)) return false;
+  return (
+    invoice.reviewStatus === "needs_review" ||
+    invoice.reviewStatus === "accounting_review" ||
+    invoice.flags.length > 0 ||
+    isOcrReviewInvoice(invoice) ||
+    isManualReviewInvoice(invoice)
+  );
+}
+
+export function isMissingFieldInvoice(invoice: Invoice) {
+  return (
+    invoice.flags.includes("missing_ship_to") ||
+    invoice.flags.includes("missing_category") ||
+    !invoice.customerName ||
+    !invoice.shipToState ||
+    !invoice.billToState ||
+    invoice.lineItems.length === 0
+  );
+}
+
+export function hasUnknownCategory(invoice: Invoice) {
+  return invoice.flags.includes("category_review") || invoice.lineItems.some((item) => item.category === "other" || item.needsReview);
+}
+
+export function isLargeInvoice(invoice: Invoice) {
+  return invoice.flags.includes("large_invoice") || Math.abs(invoice.totalAmount) >= LARGE_INVOICE_AMOUNT;
+}
+
+export function isThresholdWarningInvoice(invoice: Invoice, invoices: Invoice[], rules: NexusRule[]) {
+  const impact = buildInvoiceThresholdImpact(invoice, invoices, rules);
+  return impact.watch75 || impact.warning90 || impact.thresholdCrossingRisk;
+}
+
+export function getOperationalStatus(invoice: Invoice): OperationalStatus {
+  if (invoice.status) return invoice.status;
+  if (invoice.reviewStatus === "draft") return "draft";
+  if (invoice.reviewStatus === "approved") return "reviewed";
+  if (invoice.reviewStatus === "exported") return "exported";
+  return "open";
+}
+
+export function getInvoiceActivityDate(invoice: Invoice) {
+  return invoice.updatedAt || invoice.createdAt || invoice.pdfUploadedAt || invoice.invoiceDate;
 }
 
 export function shouldRouteToAccountingReview(invoice: Invoice, impact: InvoiceThresholdImpact) {
@@ -229,8 +304,9 @@ function buildCategoryLists(invoice: Invoice, rule?: NexusRule) {
   };
 }
 
-function getStateNextAction(status: ThresholdStatus, reviewCount: number, accountingCount: number) {
+function getStateNextAction(status: ThresholdStatus, reviewCount: number, accountingCount: number, ocrNeedsReviewCount: number) {
   if (accountingCount) return "Complete accounting review";
+  if (ocrNeedsReviewCount) return "Review OCR fields before approval";
   if (reviewCount) return "Clear review queue items";
   if (status === "crossed") return "Accounting review before additional invoices";
   if (status === "warning") return "Review large upcoming invoices";

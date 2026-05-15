@@ -409,7 +409,7 @@ export async function recordSupabaseExport(input: {
   const supabase = createSupabaseClient();
   if (!supabase) return { ok: false as const, message: "Supabase client is unavailable." };
 
-  const { error } = await supabase.from("exports").insert({
+  const payload = {
     company_id: process.env.NEXT_PUBLIC_DEMO_COMPANY_ID ?? demoCompany.id,
     export_type: input.exportType,
     state_code: input.stateCode || null,
@@ -417,7 +417,9 @@ export async function recordSupabaseExport(input: {
     date_to: input.dateTo ? toDateString(input.dateTo) : null,
     row_count: input.rowCount,
     file_name: input.fileName ?? buildExportFileName(input.exportType),
-  });
+  };
+
+  const { error } = await supabase.from("exports").insert(payload);
 
   if (error) return { ok: false as const, message: error.message };
   clearNexusWatchDataCache();

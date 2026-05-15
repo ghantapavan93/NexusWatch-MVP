@@ -1,9 +1,8 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
-  BookOpen,
   CalendarDays,
   CheckCircle2,
   Copy,
@@ -11,8 +10,8 @@ import {
   FileCheck2,
   FileSpreadsheet,
   FileText,
+  Loader2,
   MapPin,
-  MoreVertical,
   RefreshCcw,
   Search,
   ShieldCheck,
@@ -20,107 +19,156 @@ import {
 import { PageHeader } from "@/components/layout/PageHeader";
 import { StatusBadge } from "@/components/shared/StatusBadge";
 import { Toast } from "@/components/shared/Toast";
-import { csvEscape, rulesToCsv, stateSummariesToCsv } from "@/lib/csv";
-import { demoInvoices, demoRules } from "@/lib/demoData";
+import { invoiceLineItemsToCsv, rulesToCsv, stateSummariesToCsv } from "@/lib/csv";
 import { formatCurrency, formatDate, stateLabel } from "@/lib/format";
-import { buildStateSummaries } from "@/lib/nexus";
+import { isNormalExportEligible, isReviewQueueInvoice } from "@/lib/thresholdImpact";
+import type { ExportHistory, ExportType, Invoice, NexusRule, StateNexusSummary } from "@/types";
 
-type ExportType = "state_transactions" | "single_invoice" | "review_queue" | "threshold_summary" | "rules_reference";
+type PeriodType = "monthly" | "quarterly" | "half_year" | "yearly" | "custom";
 
-const exportTypes: { value: ExportType; label: string }[] = [
-  { value: "state_transactions", label: "State Transactions" },
-  { value: "single_invoice", label: "Single Invoice" },
-  { value: "review_queue", label: "Review Queue" },
-  { value: "threshold_summary", label: "Threshold Summary" },
-  { value: "rules_reference", label: "Rules Reference" },
+type ExportData = {
+  source: "supabase" | "local_demo_data";
+  invoices: Invoice[];
+  rules: NexusRule[];
+  states: StateNexusSummary[];
+  exports: ExportHistory[];
+  metrics: {
+    reviewedInvoices: number;
+    reviewQueueItems: number;
+    sourceDocumentsLinked: number;
+    ocrNeedsReview: number;
+  };
+};
+
+const exportTypes: { value: ExportType; label: string; detail: string }[] = [
+  { value: "state_transactions", label: "Approved Transactions", detail: "Approved or exported invoices only" },
+  { value: "review_queue", label: "Review Queue Items", detail: "Unresolved review and accounting items" },
+  { value: "single_invoice", label: "Single Invoice", detail: "Full detail for one invoice" },
+  { value: "threshold_summary", label: "Threshold Summary", detail: "Configured state exposure for the period" },
+  { value: "rules_reference", label: "Rules Reference", detail: "Configured state rule reference" },
 ];
 
-const previewHeaders = [
-  "Invoice Number",
-  "Invoice Date",
-  "Customer",
-  "Ship To",
-  "Bill To",
-  "Category",
-  "Line Amount",
-  "Taxable Amount",
-  "Status",
-  "Flags",
-];
+const months = [
+  ["01", "January"],
+  ["02", "February"],
+  ["03", "March"],
+  ["04", "April"],
+  ["05", "May"],
+  ["06", "June"],
+  ["07", "July"],
+  ["08", "August"],
+  ["09", "September"],
+  ["10", "October"],
+  ["11", "November"],
+  ["12", "December"],
+] as const;
+
+const years = ["2026", "2025", "2024"];
 
 export default function ExportsPage() {
+  const [data, setData] = useState<ExportData | null>(null);
+  const [loadError, setLoadError] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
   const [stateCode, setStateCode] = useState("all");
-  const [dateFrom, setDateFrom] = useState("2026-01-01");
-  const [dateTo, setDateTo] = useState("2026-12-31");
+  const [periodType, setPeriodType] = useState<PeriodType>("monthly");
+  const [year, setYear] = useState("2026");
+  const [month, setMonth] = useState("05");
+  const [quarter, setQuarter] = useState("Q2");
+  const [half, setHalf] = useState("H1");
+  const [customFrom, setCustomFrom] = useState("2026-01-01");
+  const [customTo, setCustomTo] = useState("2026-12-31");
   const [exportType, setExportType] = useState<ExportType>("state_transactions");
-  const [invoiceNumber, setInvoiceNumber] = useState("INV-1048");
-  const [message, setMessage] = useState("Configure filters, preview rows, then generate a CSV for accounting review.");
+  const [invoiceNumber, setInvoiceNumber] = useState("");
+  const [message, setMessage] = useState("Choose an accounting period, preview rows, then generate a CSV.");
   const [toastMessage, setToastMessage] = useState("");
   const [generatedCsv, setGeneratedCsv] = useState("");
   const [generatedFileName, setGeneratedFileName] = useState("");
   const [isGenerating, setIsGenerating] = useState(false);
 
-  const states = buildStateSummaries(demoRules, demoInvoices);
-  const reviewInvoices = demoInvoices.filter(
-    (invoice) =>
-      invoice.reviewStatus === "needs_review" ||
-      invoice.reviewStatus === "accounting_review" ||
-      invoice.extractionStatus === "ocr_needs_review" ||
-      invoice.flags.length > 0
+  const refreshData = useCallback(async () => {
+    setIsLoading(true);
+    setLoadError("");
+    try {
+      const response = await fetch("/api/exports", { cache: "no-store" });
+      const result = (await response.json()) as ExportData & { message?: string };
+      if (!response.ok) {
+        setLoadError(result.message ?? "Export data could not be loaded.");
+        return;
+      }
+      setData(result);
+      const requestedInvoice =
+        typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("invoice") ?? "";
+      if (requestedInvoice) {
+        setInvoiceNumber(requestedInvoice);
+        setExportType("single_invoice");
+      } else if (!invoiceNumber && result.invoices.length) {
+        setInvoiceNumber(result.invoices[0].invoiceNumber);
+      }
+    } catch {
+      setLoadError("Export data could not be loaded. Check the local server and Supabase connection.");
+    } finally {
+      setIsLoading(false);
+    }
+  }, [invoiceNumber]);
+
+  useEffect(() => {
+    refreshData();
+  }, [refreshData]);
+
+  const period = useMemo(
+    () => buildPeriod({ periodType, year, month, quarter, half, customFrom, customTo }),
+    [customFrom, customTo, half, month, periodType, quarter, year]
   );
-  const previewRows = useMemo(() => {
-    const baseInvoices =
-      exportType === "review_queue"
-        ? reviewInvoices
-        : exportType === "single_invoice"
-          ? demoInvoices.filter((invoice) => invoice.invoiceNumber === invoiceNumber)
-          : demoInvoices.filter(
-              (invoice) =>
-                (invoice.reviewStatus === "approved" || invoice.reviewStatus === "exported") &&
-                Boolean(invoice.shipToState) &&
-                !invoice.flags.includes("missing_category")
-            );
-    const filteredInvoices = baseInvoices.filter((invoice) => {
-      if (exportType === "single_invoice") return true;
+
+  const filteredInvoices = useMemo(() => {
+    const invoices = data?.invoices ?? [];
+    return invoices.filter((invoice) => {
       const matchesState = stateCode === "all" || invoice.shipToState === stateCode;
-      const matchesStart = !dateFrom || invoice.invoiceDate >= dateFrom;
-      const matchesEnd = !dateTo || invoice.invoiceDate <= dateTo;
+      const matchesStart = !period.dateFrom || invoice.invoiceDate >= period.dateFrom;
+      const matchesEnd = !period.dateTo || invoice.invoiceDate <= period.dateTo;
       return matchesState && matchesStart && matchesEnd;
     });
+  }, [data?.invoices, period.dateFrom, period.dateTo, stateCode]);
 
-    return filteredInvoices.flatMap((invoice) =>
-      invoice.lineItems.map((lineItem) => ({
-        invoice,
-        lineItem,
-      }))
-    );
-  }, [dateFrom, dateTo, exportType, invoiceNumber, reviewInvoices, stateCode]);
+  const reviewedInvoices = useMemo(() => filteredInvoices.filter(isNormalExportEligible), [filteredInvoices]);
+  const reviewQueueInvoices = useMemo(() => filteredInvoices.filter(isReviewQueueInvoice), [filteredInvoices]);
+  const singleInvoice = useMemo(
+    () => data?.invoices.find((invoice) => invoice.invoiceNumber === invoiceNumber) ?? null,
+    [data?.invoices, invoiceNumber]
+  );
+  const periodStates = useMemo(
+    () => buildPeriodStateSummaries(data?.states ?? [], reviewedInvoices),
+    [data?.states, reviewedInvoices]
+  );
 
-  const csv = useMemo(() => {
-    if (exportType === "threshold_summary") return stateSummariesToCsv(states);
-    if (exportType === "rules_reference") return rulesToCsv(demoRules);
+  const previewRows = useMemo(() => {
+    if (exportType === "single_invoice") return singleInvoice ? toLineRows([singleInvoice]) : [];
+    if (exportType === "review_queue") return toLineRows(reviewQueueInvoices);
+    if (exportType === "state_transactions") return toLineRows(reviewedInvoices);
+    return [];
+  }, [exportType, reviewedInvoices, reviewQueueInvoices, singleInvoice]);
 
-    const rows = previewRows.map(({ invoice, lineItem }) => [
-      invoice.invoiceNumber,
-      invoice.invoiceDate,
-      invoice.customerName,
-      invoice.shipToState ?? "",
-      invoice.billToState ?? "",
-      lineItem.category,
-      lineItem.amount,
-      lineItem.taxableAmount ?? 0,
-      invoice.reviewStatus,
-      invoice.flags.join("; "),
-    ]);
+  const previewCsv = useMemo(() => {
+    if (!data) return "";
+    if (exportType === "threshold_summary") return stateSummariesToCsv(periodStates);
+    if (exportType === "rules_reference") return rulesToCsv(data.rules);
+    if (exportType === "single_invoice") return invoiceLineItemsToCsv(singleInvoice ? [singleInvoice] : []);
+    if (exportType === "review_queue") return invoiceLineItemsToCsv(reviewQueueInvoices);
+    return invoiceLineItemsToCsv(reviewedInvoices);
+  }, [data, exportType, periodStates, reviewQueueInvoices, reviewedInvoices, singleInvoice]);
 
-    return [previewHeaders, ...rows].map((row) => row.map(csvEscape).join(",")).join("\n");
-  }, [exportType, previewRows, states]);
+  const previewCount =
+    exportType === "threshold_summary"
+      ? periodStates.length
+      : exportType === "rules_reference"
+        ? data?.rules.length ?? 0
+        : previewRows.length;
 
   async function generateCsv(typeOverride?: ExportType) {
     const selectedExportType = typeOverride ?? exportType;
-    setIsGenerating(true);
-    setMessage("Generating CSV and recording export history...");
     setExportType(selectedExportType);
+    setIsGenerating(true);
+    setMessage("Generating accounting-period CSV and saving export metadata...");
 
     try {
       const response = await fetch("/api/exports", {
@@ -129,8 +177,10 @@ export default function ExportsPage() {
         body: JSON.stringify({
           exportType: selectedExportType,
           stateCode: stateCode === "all" ? undefined : stateCode,
-          dateFrom: dateFrom || undefined,
-          dateTo: dateTo || undefined,
+          dateFrom: period.dateFrom || undefined,
+          dateTo: period.dateTo || undefined,
+          periodType,
+          periodLabel: period.label,
           invoiceNumber: selectedExportType === "single_invoice" ? invoiceNumber : undefined,
         }),
       });
@@ -138,6 +188,7 @@ export default function ExportsPage() {
         csv?: string;
         fileName?: string;
         rowCount?: number;
+        invoiceCount?: number;
         exportHistorySaved?: boolean;
         message?: string;
       };
@@ -150,13 +201,12 @@ export default function ExportsPage() {
       setGeneratedCsv(result.csv);
       setGeneratedFileName(result.fileName ?? "");
       setMessage(
-        result.exportHistorySaved
-          ? `Generated ${readable(selectedExportType)} CSV with ${result.rowCount ?? previewRows.length} rows. Export history saved to Supabase.`
-          : result.message ?? `Generated ${readable(selectedExportType)} CSV.`
+        `${readable(selectedExportType)} generated for ${period.label}: ${result.rowCount ?? 0} rows across ${result.invoiceCount ?? 0} records. ${
+          result.exportHistorySaved ? "Export metadata saved to Supabase." : result.message ?? "Export metadata was not saved."
+        }`
       );
-      if (result.exportHistorySaved) {
-        setToastMessage(`${result.fileName ?? readable(selectedExportType)} saved to export history.`);
-      }
+      if (result.exportHistorySaved) setToastMessage(`${result.fileName ?? "Export"} saved to export history.`);
+      await refreshData();
       return result.csv;
     } catch {
       setMessage("CSV could not be generated. Check the local server and Supabase connection.");
@@ -167,20 +217,19 @@ export default function ExportsPage() {
   }
 
   async function downloadCsv() {
-    const csvToDownload = generatedCsv || (await generateCsv()) || csv;
+    const csvToDownload = generatedCsv || (await generateCsv()) || previewCsv;
     const blob = new Blob([csvToDownload], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
-    link.download = generatedFileName || `nexuswatch-${exportType}.csv`;
+    link.download = generatedFileName || `nexuswatch-${exportType}-${period.fileToken}.csv`;
     link.click();
     URL.revokeObjectURL(url);
-    setMessage("CSV download prepared from the current export settings. Export history is recorded when the CSV is generated.");
     setToastMessage("CSV download prepared.");
   }
 
   async function copySummary() {
-    const summary = `NexusWatch export: ${readable(exportType)} | State: ${stateCode === "all" ? "All" : stateCode} | Date range: ${dateFrom || "Any"} to ${dateTo || "Any"} | Preview rows: ${previewRows.length}`;
+    const summary = `NexusWatch export: ${readable(exportType)} | Period: ${period.label} | State: ${stateCode === "all" ? "All states" : stateCode} | Preview rows: ${previewCount}`;
     await navigator.clipboard.writeText(summary);
     setMessage("Export summary copied to clipboard.");
   }
@@ -189,192 +238,133 @@ export default function ExportsPage() {
     <>
       <Toast message={toastMessage} onClose={() => setToastMessage("")} />
       <PageHeader
-        title="Exports"
-        description="Generate exports for reviewed and review-queue transaction data with audit-ready detail."
+        title="Accounting Export Command Center"
+        description="Generate monthly, quarterly, half-year, yearly, and custom transaction lists for accounting review."
       />
 
-      <div className="mb-5 grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
-        <section className="grid gap-5 lg:grid-cols-3">
-          <ExportCard
-            icon={FileCheck2}
-            tone="green"
-            title="Reviewed Export"
-            badge="Approved Only"
-            description="Export only invoices that are approved and post threshold."
-            notice="Includes only approved invoices"
-            button="Generate Reviewed Export"
-            disabled={isGenerating}
-            onGenerate={() => generateCsv("state_transactions")}
-          >
-            <MiniSelect icon={CalendarDays} label="Date Range" value="Last 30 Days" />
-            <MiniSelect icon={MapPin} label="States" value={stateCode === "all" ? "All States" : stateCode} />
-          </ExportCard>
-          <ExportCard
-            icon={FileSpreadsheet}
-            tone="orange"
-            title="Review Queue Export"
-            badge="Includes Review Items"
-            description="Export invoices in the review queue, including pending and needs review."
-            notice="Includes items in review"
-            button="Generate Review Queue Export"
-            disabled={isGenerating}
-            onGenerate={() => generateCsv("review_queue")}
-          >
-            <MiniSelect icon={CalendarDays} label="Date Range" value="Last 30 Days" />
-            <MiniSelect icon={AlertTriangle} label="Review Status" value="All Review Statuses" />
-          </ExportCard>
-          <ExportCard
-            icon={FileText}
-            tone="violet"
-            title="Single Invoice Export"
-            description="Export all data for a single invoice with full line-item and decision details."
-            notice="Includes full invoice and rule evaluation"
-            button="Generate Single Invoice Export"
-            disabled={isGenerating}
-            onGenerate={() => generateCsv("single_invoice")}
-          >
-            <label className="relative block">
-              <span className="sr-only">Search invoice</span>
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
-              <select
-                value={invoiceNumber}
-                onChange={(event) => setInvoiceNumber(event.target.value)}
-                className="h-11 w-full appearance-none rounded-xl border border-slate-200 bg-white pl-10 pr-3 text-sm font-medium text-slate-800 outline-none ring-indigo-100 focus:ring-4"
-              >
-                {demoInvoices.map((invoice) => (
-                  <option key={invoice.id} value={invoice.invoiceNumber}>
-                    {invoice.invoiceNumber} - {invoice.customerName}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </ExportCard>
-        </section>
+      {loadError ? (
+        <div className="mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-700">
+          {loadError}
+        </div>
+      ) : null}
 
-        <ExportGuidance />
-      </div>
+      <section className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <MetricCard icon={<ShieldCheck className="h-5 w-5" />} label="Approved Transactions" value={reviewedInvoices.length} detail={`${toLineRows(reviewedInvoices).length} line rows in period`} />
+        <MetricCard icon={<AlertTriangle className="h-5 w-5" />} label="Review Queue Items" value={reviewQueueInvoices.length} detail="Excluded from approved transaction export" tone="orange" />
+        <MetricCard icon={<FileText className="h-5 w-5" />} label="Source Documents" value={data?.metrics.sourceDocumentsLinked ?? 0} detail="Linked PDF records in live data" tone="indigo" />
+        <MetricCard icon={<FileCheck2 className="h-5 w-5" />} label="OCR Needs Review" value={data?.metrics.ocrNeedsReview ?? 0} detail="Review assistant records" tone="amber" />
+      </section>
 
-      <div className="mb-6 grid gap-6 xl:grid-cols-[360px_minmax(0,1fr)]">
+      <section className="mb-5 grid gap-4 xl:grid-cols-3">
+        <QuickExportCard
+          icon={<FileCheck2 className="h-5 w-5" />}
+          title="Approved Period Transactions"
+          detail="Approved/exported invoices only, filtered by accounting period and state."
+          value={`${toLineRows(reviewedInvoices).length} rows`}
+          onClick={() => generateCsv("state_transactions")}
+          disabled={isGenerating || isLoading}
+        />
+        <QuickExportCard
+          icon={<AlertTriangle className="h-5 w-5" />}
+          title="Review Queue Period Export"
+          detail="Unresolved review, OCR, and accounting review items for cleanup."
+          value={`${toLineRows(reviewQueueInvoices).length} rows`}
+          onClick={() => generateCsv("review_queue")}
+          disabled={isGenerating || isLoading}
+          tone="orange"
+        />
+        <QuickExportCard
+          icon={<FileSpreadsheet className="h-5 w-5" />}
+          title="Period Threshold Summary"
+          detail="State exposure summary calculated from approved records in the selected period."
+          value={`${periodStates.length} states`}
+          onClick={() => generateCsv("threshold_summary")}
+          disabled={isGenerating || isLoading}
+          tone="indigo"
+        />
+      </section>
+
+      <div className="grid gap-6 xl:grid-cols-[380px_minmax(0,1fr)]">
         <section className="premium-card p-5 xl:sticky xl:top-24 xl:self-start">
           <div className="flex items-center gap-3">
             <div className="rounded-xl bg-slate-950 p-3 text-white">
-              <FileSpreadsheet className="h-5 w-5" />
+              <CalendarDays className="h-5 w-5" />
             </div>
             <div>
-              <h2 className="text-sm font-black text-slate-950">Export Builder</h2>
-              <p className="mt-1 text-xs text-slate-500">Configure your export and generate a CSV for accounting review.</p>
+              <h2 className="text-sm font-black text-slate-950">Accounting Period</h2>
+              <p className="mt-1 text-xs text-slate-500">{period.label}</p>
             </div>
           </div>
 
           <div className="mt-5 space-y-4">
-            <label className="block text-sm font-bold text-slate-700">
-              State
-              <select
-                value={stateCode}
-                onChange={(event) => setStateCode(event.target.value)}
-                className="mt-1 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none ring-blue-100 focus:ring-4"
-              >
-                <option value="all">All states</option>
-                {demoRules.map((rule) => (
-                  <option key={rule.stateCode} value={rule.stateCode}>
-                    {rule.stateCode} - {rule.stateName}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <SegmentedControl
+              value={periodType}
+              onChange={(value) => setPeriodType(value as PeriodType)}
+              options={[
+                ["monthly", "Monthly"],
+                ["quarterly", "Quarterly"],
+                ["half_year", "Half Year"],
+                ["yearly", "Yearly"],
+                ["custom", "Custom"],
+              ]}
+            />
 
-            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-2">
-              <label className="block text-sm font-bold text-slate-700">
-                Date From
-                <input
-                  type="date"
-                  value={dateFrom}
-                  onChange={(event) => setDateFrom(event.target.value)}
-                  className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm text-slate-900 outline-none ring-blue-100 focus:ring-4"
-                />
-              </label>
-              <label className="block text-sm font-bold text-slate-700">
-                Date To
-                <input
-                  type="date"
-                  value={dateTo}
-                  onChange={(event) => setDateTo(event.target.value)}
-                  className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm text-slate-900 outline-none ring-blue-100 focus:ring-4"
-                />
-              </label>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Select label="Year" value={year} onChange={setYear} options={years.map((item) => [item, item])} />
+              {periodType === "monthly" ? <Select label="Month" value={month} onChange={setMonth} options={months.map(([value, label]) => [value, label])} /> : null}
+              {periodType === "quarterly" ? <Select label="Quarter" value={quarter} onChange={setQuarter} options={[["Q1", "Q1"], ["Q2", "Q2"], ["Q3", "Q3"], ["Q4", "Q4"]]} /> : null}
+              {periodType === "half_year" ? <Select label="Half Year" value={half} onChange={setHalf} options={[["H1", "Jan-Jun"], ["H2", "Jul-Dec"]]} /> : null}
             </div>
 
-            <label className="block text-sm font-bold text-slate-700">
-              Export Type
-              <select
-                value={exportType}
-                onChange={(event) => setExportType(event.target.value as ExportType)}
-                className="mt-1 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none ring-blue-100 focus:ring-4"
-              >
-                {exportTypes.map((type) => (
-                  <option key={type.value} value={type.value}>
-                    {type.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            {exportType === "single_invoice" ? (
-              <label className="block text-sm font-bold text-slate-700">
-                Single Invoice
-                <select
-                  value={invoiceNumber}
-                  onChange={(event) => setInvoiceNumber(event.target.value)}
-                  className="mt-1 h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none ring-blue-100 focus:ring-4"
-                >
-                  {demoInvoices.map((invoice) => (
-                    <option key={invoice.id} value={invoice.invoiceNumber}>
-                      {invoice.invoiceNumber} - {invoice.customerName}
-                    </option>
-                  ))}
-                </select>
-              </label>
+            {periodType === "custom" ? (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <DateInput label="From" value={customFrom} onChange={setCustomFrom} />
+                <DateInput label="To" value={customTo} onChange={setCustomTo} />
+              </div>
             ) : null}
 
-            <div>
-              <div className="text-sm font-bold text-slate-700">Include</div>
-              <div className="mt-2 flex flex-wrap gap-2">
-                <button className={`rounded-lg px-3 py-2 text-xs font-black ring-1 ${exportType === "state_transactions" ? "bg-blue-50 text-blue-700 ring-blue-200" : "bg-white text-slate-600 ring-slate-200"}`} type="button" onClick={() => setExportType("state_transactions")}>
-                  All Invoices
-                </button>
-                <button className="rounded-lg bg-white px-3 py-2 text-xs font-black text-slate-600 ring-1 ring-slate-200" type="button" onClick={() => setExportType("state_transactions")}>
-                  Reviewed Only
-                </button>
-                <button className={`rounded-lg px-3 py-2 text-xs font-black ring-1 ${exportType === "review_queue" ? "bg-orange-50 text-orange-700 ring-orange-200" : "bg-white text-slate-600 ring-slate-200"}`} type="button" onClick={() => setExportType("review_queue")}>
-                  Review Items Only
-                </button>
-                <button className={`rounded-lg px-3 py-2 text-xs font-black ring-1 ${exportType === "threshold_summary" ? "bg-violet-50 text-violet-700 ring-violet-200" : "bg-white text-slate-600 ring-slate-200"}`} type="button" onClick={() => setExportType("threshold_summary")}>
-                  Threshold Items
-                </button>
-              </div>
-            </div>
+            <Select
+              label="State"
+              value={stateCode}
+              onChange={setStateCode}
+              options={[["all", "All states"], ...(data?.rules ?? []).map((rule) => [rule.stateCode, `${rule.stateCode} - ${rule.stateName}`] as [string, string])]}
+              icon={<MapPin className="h-4 w-4" />}
+            />
 
-            <button className="flex h-12 w-full items-center justify-between rounded-xl border border-slate-200 bg-white px-4 text-sm font-black text-slate-700 shadow-sm hover:bg-slate-50" type="button">
-              Advanced Filters
-              <span>›</span>
-            </button>
+            <Select
+              label="Export Type"
+              value={exportType}
+              onChange={(value) => setExportType(value as ExportType)}
+              options={exportTypes.map((type) => [type.value, type.label])}
+              icon={<FileSpreadsheet className="h-4 w-4" />}
+            />
+
+            {exportType === "single_invoice" ? (
+              <Select
+                label="Invoice"
+                value={invoiceNumber}
+                onChange={setInvoiceNumber}
+                options={(data?.invoices ?? []).map((invoice) => [invoice.invoiceNumber, `${invoice.invoiceNumber} - ${invoice.customerName}`])}
+                icon={<Search className="h-4 w-4" />}
+              />
+            ) : null}
           </div>
 
           <div className="mt-5 grid grid-cols-2 gap-3">
-            <button type="button" disabled={isGenerating} onClick={() => generateCsv()} className="primary-button px-3 py-3 text-sm disabled:cursor-not-allowed disabled:opacity-60">
-              <Download className="h-4 w-4" />
-              Generate CSV
+            <button type="button" disabled={isGenerating || isLoading} onClick={() => generateCsv()} className="primary-button px-3 py-3 text-sm disabled:cursor-not-allowed disabled:opacity-60">
+              {isGenerating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Download className="h-4 w-4" />}
+              Generate
             </button>
-            <button type="button" disabled={isGenerating} onClick={downloadCsv} className="secondary-button px-3 py-3 text-sm disabled:cursor-not-allowed disabled:opacity-60">
-              Download CSV
+            <button type="button" disabled={isGenerating || isLoading} onClick={downloadCsv} className="secondary-button px-3 py-3 text-sm disabled:cursor-not-allowed disabled:opacity-60">
+              Download
             </button>
             <button type="button" onClick={copySummary} className="secondary-button px-3 py-3 text-sm">
               <Copy className="h-4 w-4" />
               Copy Summary
             </button>
-            <button type="button" onClick={() => setExportType("single_invoice")} className="secondary-button px-3 py-3 text-sm">
-              <FileText className="h-4 w-4" />
-              Single Invoice Export
+            <button type="button" onClick={refreshData} className="secondary-button px-3 py-3 text-sm">
+              <RefreshCcw className="h-4 w-4" />
+              Refresh
             </button>
           </div>
           <p className="mt-4 rounded-xl bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-500">{message}</p>
@@ -383,285 +373,364 @@ export default function ExportsPage() {
         <section className="data-grid">
           <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <h2 className="text-sm font-semibold text-slate-950">Export Preview</h2>
+              <h2 className="text-sm font-semibold text-slate-950">Live Export Preview</h2>
               <p className="mt-1 text-xs text-slate-500">
-                One row per line item for transaction-style exports. Summary and rules CSVs use their own export format.
+                {exportTypes.find((type) => type.value === exportType)?.detail}. Period: {period.label}.
               </p>
             </div>
             <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 ring-1 ring-blue-200">
-              {previewRows.length} preview rows
+              {previewCount} rows
             </span>
           </div>
 
-          {previewRows.length ? (
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-slate-200 text-sm">
-                <thead className="bg-slate-50 text-left text-xs font-semibold uppercase text-slate-500">
-                  <tr>
-                    <th className="px-5 py-3">Invoice Number</th>
-                    <th className="px-5 py-3">Invoice Date</th>
-                    <th className="px-5 py-3">Customer</th>
-                    <th className="px-5 py-3">Ship To</th>
-                    <th className="px-5 py-3">Bill To</th>
-                    <th className="px-5 py-3">Category</th>
-                    <th className="px-5 py-3 text-right">Line Amount</th>
-                    <th className="px-5 py-3 text-right">Taxable Amount</th>
-                    <th className="px-5 py-3">Status</th>
-                    <th className="px-5 py-3">Flags</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 bg-white">
-                  {previewRows.map(({ invoice, lineItem }) => (
-                    <tr key={`${invoice.id}-${lineItem.id}`} className="transition hover:bg-slate-50">
-                      <td className="px-5 py-4 font-semibold text-slate-950">{invoice.invoiceNumber}</td>
-                      <td className="px-5 py-4 text-slate-600">{formatDate(invoice.invoiceDate)}</td>
-                      <td className="px-5 py-4 text-slate-700">{invoice.customerName}</td>
-                      <td className="px-5 py-4 text-slate-600">{stateLabel(invoice.shipToState)}</td>
-                      <td className="px-5 py-4 text-slate-600">{stateLabel(invoice.billToState)}</td>
-                      <td className="px-5 py-4 capitalize text-slate-600">{lineItem.category}</td>
-                      <td className="px-5 py-4 text-right font-medium text-slate-800">{formatCurrency(lineItem.amount)}</td>
-                      <td className="px-5 py-4 text-right font-medium text-slate-800">{formatCurrency(lineItem.taxableAmount ?? 0)}</td>
-                      <td className="px-5 py-4">
-                        <StatusBadge status={invoice.reviewStatus} />
-                      </td>
-                      <td className="px-5 py-4">
-                        <div className="flex flex-wrap gap-2">
-                          {invoice.flags.length ? (
-                            invoice.flags.map((flag) => <StatusBadge key={flag} status={flag} />)
-                          ) : (
-                            <span className="text-xs text-slate-500">None</span>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          {isLoading ? (
+            <div className="flex items-center justify-center gap-2 px-5 py-16 text-sm text-slate-500">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading export data...
             </div>
+          ) : exportType === "threshold_summary" ? (
+            <StatePreview states={periodStates} />
+          ) : exportType === "rules_reference" ? (
+            <RulesPreview rules={data?.rules ?? []} />
+          ) : previewRows.length ? (
+            <TransactionPreview rows={previewRows} />
           ) : (
             <div className="px-5 py-12 text-center">
               <h3 className="text-sm font-semibold text-slate-950">No export rows found</h3>
-              <p className="mt-2 text-sm text-slate-500">Adjust the state, date range, or export type to preview rows.</p>
+              <p className="mt-2 text-sm text-slate-500">Adjust the accounting period, state, or export type.</p>
             </div>
           )}
         </section>
       </div>
 
-      <RecentExports generatedFileName={generatedFileName} generatedType={exportType} generatedRows={previewRows.length} />
+      <RecentExports rows={data?.exports ?? []} onRefresh={refreshData} />
     </>
   );
 }
 
-function ExportCard({
-  icon: Icon,
-  tone,
-  title,
-  badge,
-  description,
-  notice,
-  button,
-  disabled,
-  onGenerate,
-  children,
-}: {
-  icon: typeof FileText;
-  tone: "green" | "orange" | "violet";
-  title: string;
-  badge?: string;
-  description: string;
-  notice: string;
-  button: string;
-  disabled: boolean;
-  onGenerate: () => void;
-  children: ReactNode;
-}) {
-  const toneStyles = {
-    green: {
-      icon: "bg-emerald-50 text-emerald-600",
-      badge: "bg-emerald-50 text-emerald-700 ring-emerald-200",
-      notice: "bg-emerald-50 text-emerald-800",
-      button: "bg-emerald-600 hover:bg-emerald-700",
-    },
-    orange: {
-      icon: "bg-orange-50 text-orange-600",
-      badge: "bg-orange-50 text-orange-700 ring-orange-200",
-      notice: "bg-orange-50 text-orange-800",
-      button: "bg-orange-600 hover:bg-orange-700",
-    },
-    violet: {
-      icon: "bg-violet-50 text-violet-600",
-      badge: "bg-violet-50 text-violet-700 ring-violet-200",
-      notice: "bg-violet-50 text-violet-800",
-      button: "bg-indigo-600 hover:bg-indigo-700",
-    },
-  }[tone];
+function TransactionPreview({ rows }: { rows: ReturnType<typeof toLineRows> }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="min-w-[1120px] divide-y divide-slate-200 text-sm">
+        <thead className="bg-slate-50 text-left text-xs font-semibold uppercase text-slate-500">
+          <tr>
+            <th className="px-5 py-3">Invoice</th>
+            <th className="px-5 py-3">Date</th>
+            <th className="px-5 py-3">Customer</th>
+            <th className="px-5 py-3">State</th>
+            <th className="px-5 py-3">Category</th>
+            <th className="px-5 py-3 text-right">Line Amount</th>
+            <th className="px-5 py-3 text-right">Taxable</th>
+            <th className="px-5 py-3">Review</th>
+            <th className="px-5 py-3">Source</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100 bg-white">
+          {rows.map(({ invoice, lineItem }) => (
+            <tr key={`${invoice.id}-${lineItem.id}`} className="transition hover:bg-slate-50">
+              <td className="px-5 py-4 font-semibold text-slate-950">{invoice.invoiceNumber}</td>
+              <td className="px-5 py-4 text-slate-600">{formatDate(invoice.invoiceDate)}</td>
+              <td className="px-5 py-4 text-slate-700">{invoice.customerName}</td>
+              <td className="px-5 py-4 text-slate-600">{stateLabel(invoice.shipToState)}</td>
+              <td className="px-5 py-4 capitalize text-slate-600">{lineItem.category}</td>
+              <td className="px-5 py-4 text-right font-medium text-slate-800">{formatCurrency(lineItem.amount)}</td>
+              <td className="px-5 py-4 text-right font-medium text-slate-800">{formatCurrency(lineItem.taxableAmount ?? 0)}</td>
+              <td className="px-5 py-4"><StatusBadge status={invoice.reviewStatus} /></td>
+              <td className="px-5 py-4 text-xs text-slate-500">{invoice.documentId || invoice.pdfFileName ? "Source linked" : "No source document linked"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
+function StatePreview({ states }: { states: StateNexusSummary[] }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="min-w-full divide-y divide-slate-200 text-sm">
+        <thead className="bg-slate-50 text-left text-xs font-semibold uppercase text-slate-500">
+          <tr>
+            <th className="px-5 py-3">State</th>
+            <th className="px-5 py-3 text-right">Threshold</th>
+            <th className="px-5 py-3 text-right">Taxable Total</th>
+            <th className="px-5 py-3 text-right">Remaining</th>
+            <th className="px-5 py-3">Status</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100 bg-white">
+          {states.map((state) => (
+            <tr key={state.stateCode}>
+              <td className="px-5 py-4 font-semibold text-slate-950">{state.stateName} ({state.stateCode})</td>
+              <td className="px-5 py-4 text-right">{formatCurrency(state.thresholdAmount)}</td>
+              <td className="px-5 py-4 text-right">{formatCurrency(state.taxableTotal)}</td>
+              <td className="px-5 py-4 text-right">{formatCurrency(state.remaining)}</td>
+              <td className="px-5 py-4"><StatusBadge status={state.status === "safe" ? "healthy" : state.status} /></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function RulesPreview({ rules }: { rules: NexusRule[] }) {
+  return (
+    <div className="overflow-x-auto">
+      <table className="min-w-full divide-y divide-slate-200 text-sm">
+        <thead className="bg-slate-50 text-left text-xs font-semibold uppercase text-slate-500">
+          <tr>
+            <th className="px-5 py-3">State</th>
+            <th className="px-5 py-3 text-right">Threshold</th>
+            <th className="px-5 py-3">SaaS</th>
+            <th className="px-5 py-3">Hardware</th>
+            <th className="px-5 py-3">Services</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100 bg-white">
+          {rules.map((rule) => (
+            <tr key={rule.id}>
+              <td className="px-5 py-4 font-semibold text-slate-950">{rule.stateName} ({rule.stateCode})</td>
+              <td className="px-5 py-4 text-right">{formatCurrency(rule.thresholdAmount)}</td>
+              <td className="px-5 py-4">{rule.saasTaxable ? "Taxable" : "Excluded"}</td>
+              <td className="px-5 py-4">{rule.hardwareTaxable ? "Taxable" : "Excluded"}</td>
+              <td className="px-5 py-4">{rule.servicesTaxable ? "Taxable" : "Excluded"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function MetricCard({ icon, label, value, detail, tone = "green" }: { icon: ReactNode; label: string; value: number; detail: string; tone?: "green" | "orange" | "indigo" | "amber" }) {
+  const tones = {
+    green: "bg-emerald-50 text-emerald-700 ring-emerald-100",
+    orange: "bg-orange-50 text-orange-700 ring-orange-100",
+    indigo: "bg-indigo-50 text-indigo-700 ring-indigo-100",
+    amber: "bg-amber-50 text-amber-700 ring-amber-100",
+  }[tone];
   return (
     <div className="premium-card p-5">
-      <div className="flex items-start gap-4">
-        <span className={`grid h-14 w-14 shrink-0 place-items-center rounded-2xl ${toneStyles.icon}`}>
-          <Icon className="h-6 w-6" />
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-base font-black text-slate-950">{title}</h2>
-            {badge ? (
-              <span className={`rounded-full px-2.5 py-1 text-xs font-black ring-1 ${toneStyles.badge}`}>{badge}</span>
-            ) : null}
-          </div>
-          <p className="mt-2 text-sm leading-6 text-slate-600">{description}</p>
-        </div>
-      </div>
-      <div className="mt-5 space-y-3">{children}</div>
-      <div className={`mt-5 rounded-xl px-3 py-3 text-sm font-bold ${toneStyles.notice}`}>{notice}</div>
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={onGenerate}
-        className={`mt-4 inline-flex w-full items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-black text-white shadow-sm transition disabled:cursor-not-allowed disabled:opacity-60 ${toneStyles.button}`}
-      >
-        <Download className="h-4 w-4" />
-        {button}
-      </button>
+      <span className={`inline-flex h-11 w-11 items-center justify-center rounded-xl ring-1 ${tones}`}>{icon}</span>
+      <div className="mt-4 text-xs font-bold uppercase tracking-wide text-slate-500">{label}</div>
+      <div className="mt-1 text-3xl font-black text-slate-950">{value.toLocaleString()}</div>
+      <div className="mt-2 text-xs leading-5 text-slate-500">{detail}</div>
     </div>
   );
 }
 
-function MiniSelect({ icon: Icon, label, value }: { icon: typeof CalendarDays; label: string; value: string }) {
+function QuickExportCard({ icon, title, detail, value, onClick, disabled, tone = "green" }: { icon: ReactNode; title: string; detail: string; value: string; onClick: () => void; disabled: boolean; tone?: "green" | "orange" | "indigo" }) {
+  const tones = {
+    green: "bg-emerald-600 hover:bg-emerald-700",
+    orange: "bg-orange-600 hover:bg-orange-700",
+    indigo: "bg-indigo-600 hover:bg-indigo-700",
+  }[tone];
   return (
-    <div className="flex h-11 items-center justify-between rounded-xl border border-slate-200 bg-white px-3 text-sm">
-      <span className="flex items-center gap-2 text-slate-500">
-        <Icon className="h-4 w-4" />
-        {label}
+    <div className="premium-card p-5">
+      <div className="flex items-start gap-3">
+        <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-slate-100 text-slate-700">{icon}</span>
+        <div>
+          <h2 className="font-black text-slate-950">{title}</h2>
+          <p className="mt-1 text-sm leading-6 text-slate-600">{detail}</p>
+        </div>
+      </div>
+      <div className="mt-4 flex items-center justify-between gap-3">
+        <span className="text-sm font-bold text-slate-700">{value}</span>
+        <button type="button" disabled={disabled} onClick={onClick} className={`rounded-xl px-4 py-2 text-sm font-black text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-60 ${tones}`}>
+          Generate
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function SegmentedControl({ value, onChange, options }: { value: string; onChange: (value: string) => void; options: [string, string][] }) {
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      {options.map(([optionValue, label]) => (
+        <button
+          key={optionValue}
+          type="button"
+          onClick={() => onChange(optionValue)}
+          className={`rounded-xl px-3 py-2 text-xs font-black ring-1 ${
+            value === optionValue ? "bg-indigo-50 text-indigo-700 ring-indigo-200" : "bg-white text-slate-600 ring-slate-200"
+          }`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function Select({ label, value, onChange, options, icon }: { label: string; value: string; onChange: (value: string) => void; options: [string, string][]; icon?: ReactNode }) {
+  return (
+    <label className="block text-sm font-bold text-slate-700">
+      {label}
+      <span className="relative mt-1 block">
+        {icon ? <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">{icon}</span> : null}
+        <select
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          className={`h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none ring-blue-100 focus:ring-4 ${icon ? "pl-10" : ""}`}
+        >
+          {options.map(([optionValue, optionLabel]) => (
+            <option key={optionValue} value={optionValue}>
+              {optionLabel}
+            </option>
+          ))}
+        </select>
       </span>
-      <span className="font-semibold text-slate-800">{value}</span>
-    </div>
+    </label>
   );
 }
 
-function ExportGuidance() {
+function DateInput({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
   return (
-    <aside className="premium-card p-5">
-      <div className="flex items-center gap-3">
-        <span className="grid h-10 w-10 place-items-center rounded-xl bg-indigo-50 text-indigo-600">
-          <BookOpen className="h-5 w-5" />
-        </span>
-        <h2 className="font-black text-indigo-700">Export Guidance</h2>
-      </div>
-      <ul className="mt-5 space-y-3 text-sm leading-6 text-slate-700">
-        <li><span className="font-black text-slate-950">Reviewed Export</span> includes only approved invoices above the configured threshold.</li>
-        <li><span className="font-black text-slate-950">Review Queue Export</span> includes all items pending or in review.</li>
-        <li><span className="font-black text-slate-950">Single Invoice Export</span> provides full detail for audit or research.</li>
-      </ul>
-      <div className="mt-5 border-t border-slate-200 pt-5">
-        <div className="flex items-center gap-2 font-black text-slate-950">
-          <ShieldCheck className="h-5 w-5 text-indigo-600" />
-          Audit Readiness
-        </div>
-        <p className="mt-3 text-sm leading-6 text-slate-600">
-          All exports include decision metadata, thresholds, and state exposure details for accounting review.
-        </p>
-      </div>
-    </aside>
+    <label className="block text-sm font-bold text-slate-700">
+      {label}
+      <input
+        type="date"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="mt-1 h-11 w-full rounded-xl border border-slate-200 px-3 text-sm text-slate-900 outline-none ring-blue-100 focus:ring-4"
+      />
+    </label>
   );
 }
 
-function RecentExports({
-  generatedFileName,
-  generatedType,
-  generatedRows,
-}: {
-  generatedFileName: string;
-  generatedType: ExportType;
-  generatedRows: number;
-}) {
-  const rows = [
-    {
-      type: generatedFileName ? readable(generatedType) : "Reviewed Export",
-      scope: "All States",
-      rows: generatedFileName ? generatedRows : 12458,
-      file: generatedFileName || "reviewed_export_2026-05-14_0915.csv",
-      created: "May 14, 2026 9:15 AM",
-      badge: generatedType === "review_queue" ? "Includes Review Items" : "Approved Only",
-    },
-    { type: "Review Queue Export", scope: "Texas, Illinois", rows: 2731, file: "review_queue_2026-05-14_0832.csv", created: "May 14, 2026 8:32 AM", badge: "Includes Review Items" },
-    { type: "Single Invoice Export", scope: "Invoice INV-1048", rows: 3, file: "invoice_INV-1048_2026-05-14_0740.csv", created: "May 14, 2026 7:40 AM", badge: "Full Invoice Detail" },
-    { type: "Reviewed Export", scope: "California, New York", rows: 8921, file: "reviewed_export_2026-05-13_1635.csv", created: "May 13, 2026 4:35 PM", badge: "Approved Only" },
-  ];
-
+function RecentExports({ rows, onRefresh }: { rows: ExportHistory[]; onRefresh: () => void }) {
   return (
-    <section className="data-grid">
+    <section className="data-grid mt-6">
       <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-        <h2 className="text-lg font-black text-slate-950">Recent Exports</h2>
-        <button className="secondary-button px-3 py-2 text-sm" type="button">
+        <h2 className="text-lg font-black text-slate-950">Recent Export Metadata</h2>
+        <button className="secondary-button px-3 py-2 text-sm" type="button" onClick={onRefresh}>
           <RefreshCcw className="h-4 w-4" />
           Refresh
         </button>
       </div>
-      <div className="overflow-x-auto">
-        <table className="min-w-[980px] divide-y divide-slate-200 text-sm">
-          <thead className="bg-slate-50 text-left text-xs font-black uppercase tracking-wide text-slate-500">
-            <tr>
-              <th className="px-5 py-3">Export Type</th>
-              <th className="px-5 py-3">Scope</th>
-              <th className="px-5 py-3 text-right">Row Count</th>
-              <th className="px-5 py-3">File Name</th>
-              <th className="px-5 py-3">Generated By</th>
-              <th className="px-5 py-3">Created At</th>
-              <th className="px-5 py-3">Status</th>
-              <th className="px-5 py-3"></th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100 bg-white">
-            {rows.map((row) => (
-              <tr key={`${row.type}-${row.file}`} className="hover:bg-slate-50">
-                <td className="px-5 py-4">
-                  <div className="flex items-center gap-3">
-                    <span className="grid h-9 w-9 place-items-center rounded-lg bg-emerald-50 text-emerald-600">
-                      <FileCheck2 className="h-4 w-4" />
-                    </span>
-                    <div>
-                      <div className="font-black text-slate-950">{row.type}</div>
-                      <span className={`mt-1 inline-flex rounded-full px-2 py-0.5 text-xs font-bold ring-1 ${row.badge.includes("Review") ? "bg-orange-50 text-orange-700 ring-orange-200" : "bg-emerald-50 text-emerald-700 ring-emerald-200"}`}>
-                        {row.badge}
-                      </span>
-                    </div>
-                  </div>
-                </td>
-                <td className="px-5 py-4 text-slate-700">{row.scope}<div className="text-xs text-slate-500">Last 30 Days</div></td>
-                <td className="px-5 py-4 text-right font-black text-slate-950">{row.rows.toLocaleString()}</td>
-                <td className="px-5 py-4 text-slate-700">{row.file}<div className="text-xs text-slate-500">CSV</div></td>
-                <td className="px-5 py-4">
-                  <span className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-violet-100 text-xs font-black text-violet-700">XO</span>
-                  <span className="ml-2 text-slate-700">Xemelgo Demo Operations</span>
-                </td>
-                <td className="px-5 py-4 text-slate-700">{row.created}</td>
-                <td className="px-5 py-4">
-                  <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700 ring-1 ring-emerald-200">
-                    <CheckCircle2 className="h-3.5 w-3.5" />
-                    Completed
-                  </span>
-                </td>
-                <td className="px-5 py-4 text-right">
-                  <button className="grid h-9 w-9 place-items-center rounded-lg text-slate-500 hover:bg-slate-100" type="button">
-                    <MoreVertical className="h-4 w-4" />
-                  </button>
-                </td>
+      {rows.length ? (
+        <div className="overflow-x-auto">
+          <table className="min-w-[980px] divide-y divide-slate-200 text-sm">
+            <thead className="bg-slate-50 text-left text-xs font-black uppercase tracking-wide text-slate-500">
+              <tr>
+                <th className="px-5 py-3">Export Type</th>
+                <th className="px-5 py-3">Scope</th>
+                <th className="px-5 py-3 text-right">Rows</th>
+                <th className="px-5 py-3">File Name</th>
+                <th className="px-5 py-3">Date Range</th>
+                <th className="px-5 py-3">Created</th>
+                <th className="px-5 py-3">Status</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <div className="flex items-center justify-between border-t border-slate-200 px-5 py-4 text-sm text-slate-500">
-        <span>Showing 1 to {rows.length} of {rows.length} exports</span>
-        <div className="flex items-center gap-2">
-          <button className="secondary-button px-3 py-2 text-sm opacity-60" type="button">Prev</button>
-          <button className="grid h-9 w-9 place-items-center rounded-lg bg-indigo-50 font-bold text-indigo-700 ring-1 ring-indigo-200" type="button">1</button>
-          <button className="secondary-button px-3 py-2 text-sm opacity-60" type="button">Next</button>
+            </thead>
+            <tbody className="divide-y divide-slate-100 bg-white">
+              {rows.map((row) => (
+                <tr key={row.id} className="hover:bg-slate-50">
+                  <td className="px-5 py-4 font-black text-slate-950">{readable(row.exportType)}</td>
+                  <td className="px-5 py-4 text-slate-700">{row.stateCode ?? "All states"}</td>
+                  <td className="px-5 py-4 text-right font-black text-slate-950">{row.rowCount.toLocaleString()}</td>
+                  <td className="px-5 py-4 text-slate-700">{row.fileName ?? "CSV export"}</td>
+                  <td className="px-5 py-4 text-slate-700">{row.dateFrom ?? "Any"} to {row.dateTo ?? "Any"}</td>
+                  <td className="px-5 py-4 text-slate-700">{formatDate(row.createdAt ?? undefined)}</td>
+                  <td className="px-5 py-4">
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-bold text-emerald-700 ring-1 ring-emerald-200">
+                      <CheckCircle2 className="h-3.5 w-3.5" />
+                      Saved
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-      </div>
+      ) : (
+        <div className="px-5 py-10 text-sm text-slate-500">No export metadata saved yet.</div>
+      )}
     </section>
   );
+}
+
+function toLineRows(invoices: Invoice[]) {
+  return invoices.flatMap((invoice) => invoice.lineItems.map((lineItem) => ({ invoice, lineItem })));
+}
+
+function buildPeriod({
+  periodType,
+  year,
+  month,
+  quarter,
+  half,
+  customFrom,
+  customTo,
+}: {
+  periodType: PeriodType;
+  year: string;
+  month: string;
+  quarter: string;
+  half: string;
+  customFrom: string;
+  customTo: string;
+}) {
+  if (periodType === "custom") {
+    return {
+      dateFrom: customFrom,
+      dateTo: customTo,
+      label: `${customFrom || "Any"} to ${customTo || "Any"}`,
+      fileToken: `${customFrom || "any"}_${customTo || "any"}`,
+    };
+  }
+  if (periodType === "yearly") {
+    return { dateFrom: `${year}-01-01`, dateTo: `${year}-12-31`, label: `Year ${year}`, fileToken: year };
+  }
+  if (periodType === "half_year") {
+    const isFirst = half === "H1";
+    return {
+      dateFrom: `${year}-${isFirst ? "01" : "07"}-01`,
+      dateTo: `${year}-${isFirst ? "06-30" : "12-31"}`,
+      label: `${half} ${year}`,
+      fileToken: `${half.toLowerCase()}_${year}`,
+    };
+  }
+  if (periodType === "quarterly") {
+    const ranges: Record<string, [string, string, string]> = {
+      Q1: ["01-01", "03-31", "Q1"],
+      Q2: ["04-01", "06-30", "Q2"],
+      Q3: ["07-01", "09-30", "Q3"],
+      Q4: ["10-01", "12-31", "Q4"],
+    };
+    const [from, to, label] = ranges[quarter] ?? ranges.Q1;
+    return { dateFrom: `${year}-${from}`, dateTo: `${year}-${to}`, label: `${label} ${year}`, fileToken: `${label.toLowerCase()}_${year}` };
+  }
+  const monthName = months.find(([value]) => value === month)?.[1] ?? "Month";
+  const lastDay = new Date(Number(year), Number(month), 0).getDate().toString().padStart(2, "0");
+  return {
+    dateFrom: `${year}-${month}-01`,
+    dateTo: `${year}-${month}-${lastDay}`,
+    label: `${monthName} ${year}`,
+    fileToken: `${year}_${month}`,
+  };
+}
+
+function buildPeriodStateSummaries(states: StateNexusSummary[], reviewedInvoices: Invoice[]) {
+  return states.map((state) => {
+    const stateInvoices = reviewedInvoices.filter((invoice) => invoice.shipToState === state.stateCode);
+    const taxableTotal = stateInvoices.reduce((sum, invoice) => sum + invoice.taxableAmount, 0);
+    const invoiceTotal = stateInvoices.reduce((sum, invoice) => sum + invoice.totalAmount, 0);
+    const percentUsed = state.thresholdAmount > 0 ? (taxableTotal / state.thresholdAmount) * 100 : 0;
+    const status: StateNexusSummary["status"] =
+      percentUsed >= 100 ? "crossed" : percentUsed >= 90 ? "warning" : percentUsed >= 75 ? "watch" : "safe";
+    return {
+      ...state,
+      taxableTotal,
+      invoiceTotal,
+      excludedTotal: invoiceTotal - taxableTotal,
+      percentUsed,
+      remaining: Math.max(state.thresholdAmount - taxableTotal, 0),
+      status,
+      nextAction: status === "safe" ? "Continue monitoring" : "Review period transactions with accounting",
+    };
+  });
 }
 
 function readable(value: string) {

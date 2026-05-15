@@ -50,9 +50,6 @@ export function AppSidebar() {
                 <Icon className="h-4 w-4" />
               </span>
               <span className="flex-1 whitespace-nowrap">{item.label}</span>
-              {item.href === "/review" ? (
-                <span className="rounded-full bg-orange-500 px-2 py-0.5 text-[11px] font-bold text-white shadow-sm">49</span>
-              ) : null}
             </Link>
           );
         })}
