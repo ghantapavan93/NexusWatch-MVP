@@ -1,40 +1,72 @@
-import { CheckCircle2, Clock3, Eye, FileText, Pencil, Save, Scale } from "lucide-react";
+import Link from "next/link";
+import { CheckCircle2, FileText, Pencil, Scale, ShieldCheck } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
-import { PremiumRulesTable } from "@/components/rules/PremiumRulesTable";
+import { RulesWorkbench } from "@/components/rules/RulesWorkbench";
+import { formatDate } from "@/lib/format";
 import { getNexusWatchData } from "@/lib/supabaseData";
 
 export const dynamic = "force-dynamic";
 
 export default async function RulesPage() {
   const { rules } = await getNexusWatchData();
+  const lastReviewed = rules
+    .map((rule) => rule.lastReviewed)
+    .filter((value): value is string => Boolean(value))
+    .sort()
+    .at(-1);
+  const editableCategories = rules.reduce(
+    (sum, rule) => sum + (rule.saasTaxable ? 0 : 1) + (rule.hardwareTaxable ? 0 : 1) + (rule.servicesTaxable ? 0 : 1),
+    0
+  );
 
   return (
     <>
       <PageHeader
         title="Rules"
-        description="Configure state threshold and category logic that drives exposure and recommended actions."
+        description="Configure state threshold and category logic that drives exposure and recommended actions. Edits save to Supabase and refresh exposure across the app."
         action={
           <div className="flex flex-wrap items-center gap-2">
-            <button className="secondary-button px-4 py-2" type="button">Discard Changes</button>
-            <button className="secondary-button px-4 py-2 text-indigo-700" type="button">
-              <Eye className="h-4 w-4" />
-              Preview Impact
-            </button>
-            <button className="primary-button px-4 py-2" type="button">
-              <Save className="h-4 w-4" />
-              Save Changes
-            </button>
+            <Link href="/states" className="secondary-button px-4 py-2">
+              View State Exposure
+            </Link>
+            <Link href="/exports?type=rules_reference" className="primary-button px-4 py-2">
+              Export Rules Reference
+            </Link>
           </div>
         }
       />
       <section className="premium-card mb-6 grid gap-5 p-6 md:grid-cols-2 xl:grid-cols-4">
-        <SummaryCard icon={FileText} label="Configured Rules" value={rules.length} detail={`Across ${rules.length} states`} tone="violet" />
-        <SummaryCard icon={CheckCircle2} label="Published Rules" value={rules.length} detail="Last published 2 days ago" tone="emerald" />
-        <SummaryCard icon={Pencil} label="Draft Changes" value={0} detail="Unpublished edits" tone="orange" />
-        <SummaryCard icon={Clock3} label="Last Change" valueText="May 14, 2026" detail="by System Admin" tone="indigo" />
+        <SummaryCard
+          icon={FileText}
+          label="Configured Rules"
+          value={String(rules.length)}
+          detail={`Across ${rules.length} state${rules.length === 1 ? "" : "s"}`}
+          tone="violet"
+        />
+        <SummaryCard
+          icon={CheckCircle2}
+          label="Last Rule Review"
+          value={lastReviewed ? formatDate(lastReviewed) : "No reviews yet"}
+          detail="Updated whenever a rule is saved"
+          tone="emerald"
+        />
+        <SummaryCard
+          icon={Pencil}
+          label="Excluded Category Treatments"
+          value={String(editableCategories)}
+          detail="Categories marked Excluded across rules"
+          tone="orange"
+        />
+        <SummaryCard
+          icon={ShieldCheck}
+          label="Audit Logging"
+          value="On"
+          detail="Every rule save writes an audit log entry"
+          tone="indigo"
+        />
       </section>
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <PremiumRulesTable rules={rules} />
+        <RulesWorkbench rules={rules} />
         <RulesGuardrails />
       </div>
     </>
@@ -45,14 +77,12 @@ function SummaryCard({
   icon: Icon,
   label,
   value,
-  valueText,
   detail,
   tone,
 }: {
   icon: typeof FileText;
   label: string;
-  value?: number;
-  valueText?: string;
+  value: string;
   detail: string;
   tone: "violet" | "emerald" | "orange" | "indigo";
 }) {
@@ -70,7 +100,7 @@ function SummaryCard({
       </span>
       <div>
         <div className="text-sm font-semibold text-slate-600">{label}</div>
-        <div className="mt-1 text-3xl font-black tracking-tight text-slate-950">{valueText ?? value?.toLocaleString()}</div>
+        <div className="mt-1 text-3xl font-black tracking-tight text-slate-950">{value}</div>
         <div className="mt-1 text-xs font-medium text-slate-500">{detail}</div>
       </div>
     </div>
@@ -80,7 +110,7 @@ function SummaryCard({
 function RulesGuardrails() {
   const items = [
     ["Not Tax Advice", "Rules do not constitute legal or tax advice. Validate with your tax advisor."],
-    ["Representative, Not Exhaustive", "Thresholds reflect demo assumptions and may not cover every scenario."],
+    ["Representative, Not Exhaustive", "Thresholds reflect configured assumptions and may not cover every scenario."],
     ["Subject to Change", "Rules, guidance, and audit focus change often. Review rules regularly."],
     ["Document Judgment", "Provide clear review notes to support your decision rationale."],
     ["Prefer Conservative Defaults", "When in doubt, escalate for review rather than auto-approve."],
@@ -107,11 +137,6 @@ function RulesGuardrails() {
             </div>
           </div>
         ))}
-      </div>
-      <div className="mt-6 rounded-2xl bg-violet-50 p-4 ring-1 ring-violet-100">
-        <div className="text-sm font-black text-violet-950">Need help?</div>
-        <p className="mt-2 text-sm leading-6 text-violet-900/80">Use AI Brief to understand recommendations or contact your tax team for guidance.</p>
-        <a className="secondary-button mt-4 px-3 py-2 text-sm text-indigo-700" href="/ai-brief">Open AI Brief</a>
       </div>
     </aside>
   );

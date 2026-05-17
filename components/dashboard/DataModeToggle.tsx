@@ -14,10 +14,12 @@ export function DataModeToggle({
   const router = useRouter();
   const isLive = mode === "live" && source === "supabase";
   const detail = isLive
-    ? "Showing Sara's uploaded invoices"
+    ? "Showing uploaded invoices from this workspace"
     : mode === "live"
-      ? "Live requested; using safe fallback data"
-      : "Showing Xemelgo sample data";
+      ? "Live requested; Supabase unreachable, using local sample data"
+      : source === "supabase"
+        ? "Showing all Supabase invoices (sample + uploaded)"
+        : "Showing local sample data";
 
   function setMode(nextMode: NexusWatchDataMode) {
     document.cookie = `nexuswatch_data_mode=${nextMode}; path=/; max-age=31536000; samesite=lax`;

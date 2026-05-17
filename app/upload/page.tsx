@@ -2,7 +2,8 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, CheckCircle2, FileText, Plus, Send, Sparkles, Trash2, Upload } from "lucide-react";
+import Link from "next/link";
+import { AlertTriangle, ArrowRight, CheckCircle2, FileText, Loader2, Plus, RefreshCcw, Send, Sparkles, Trash2, Upload } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { StatusBadge } from "@/components/shared/StatusBadge";
 import { Toast } from "@/components/shared/Toast";
@@ -63,6 +64,11 @@ export default function UploadPage() {
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [uploadedPdf, setUploadedPdf] = useState<PdfUpload | null>(null);
   const [isUploadingPdf, setIsUploadingPdf] = useState(false);
+  const [liveStateTaxableTotal, setLiveStateTaxableTotal] = useState<number | null>(null);
+  const [liveStateLoading, setLiveStateLoading] = useState(false);
+  const [liveStateFetchedFor, setLiveStateFetchedFor] = useState<string | null>(null);
+  const [savedInvoiceNumber, setSavedInvoiceNumber] = useState("");
+  const [savedReviewStatus, setSavedReviewStatus] = useState<"draft" | "needs_review" | "">("");
   const [lineItems, setLineItems] = useState<DraftLineItem[]>([
     { id: "line-1", description: "SaaS expansion seats", category: "saas", amount: "32000" },
     { id: "line-2", description: "Warehouse scanner hardware", category: "hardware", amount: "20000" },
@@ -70,7 +76,12 @@ export default function UploadPage() {
   ]);
 
   const selectedRule = demoRules.find((rule) => rule.stateCode === shipToState);
-  const stateSummary = buildStateSummaries(demoRules, demoInvoices).find((state) => state.stateCode === shipToState);
+  const demoStateSummary = buildStateSummaries(demoRules, demoInvoices).find((state) => state.stateCode === shipToState);
+  const stateSummaryTaxableTotal =
+    liveStateFetchedFor === shipToState && liveStateTaxableTotal !== null
+      ? liveStateTaxableTotal
+      : demoStateSummary?.taxableTotal ?? 0;
+  const stateSummary = demoStateSummary ? { ...demoStateSummary, taxableTotal: stateSummaryTaxableTotal } : undefined;
   const parsedPastedInvoice = useMemo(() => (pastedText.trim() ? parseInvoiceText(pastedText) : null), [pastedText]);
   const detectedMismatchWarning =
     uploadedPdf?.detectedFields?.invoiceNumber &&
@@ -278,6 +289,8 @@ export default function UploadPage() {
       );
       rememberLiveInvoice(result.invoice?.invoiceNumber ?? invoiceNumber);
       setSavedInvoiceId(result.invoice?.id ?? savedInvoiceId);
+      setSavedInvoiceNumber(result.invoice?.invoiceNumber ?? invoiceNumber);
+      setSavedReviewStatus(reviewStatus);
       if (result.invoice?.id || result.invoice?.invoiceNumber) {
         router.refresh();
       }
@@ -366,6 +379,37 @@ export default function UploadPage() {
     const next = Array.from(new Set([normalizedInvoiceNumber, ...existing])).slice(0, 50);
     document.cookie = "nexuswatch_data_mode=live; path=/; max-age=31536000; samesite=lax";
     document.cookie = `nexuswatch_live_invoice_numbers=${encodeURIComponent(next.join(","))}; path=/; max-age=31536000; samesite=lax`;
+  }
+
+  async function previewLiveImpact() {
+    if (!shipToState) {
+      setActionMessage("Select a ship-to state to preview live impact.");
+      return;
+    }
+    setLiveStateLoading(true);
+    setActionMessage(`Refreshing live exposure for ${shipToState} from Supabase...`);
+    try {
+      const response = await fetch(`/api/states/${shipToState}`, { cache: "no-store" });
+      if (!response.ok) {
+        if (response.status === 404) {
+          setLiveStateTaxableTotal(0);
+          setLiveStateFetchedFor(shipToState);
+          setActionMessage(`No invoices yet for ${shipToState}. Preview is based on this invoice only.`);
+          return;
+        }
+        setActionMessage("Live exposure could not be loaded. Check the local server and Supabase connection.");
+        return;
+      }
+      const result = (await response.json()) as { state?: { taxableTotal?: number } };
+      const fetched = typeof result.state?.taxableTotal === "number" ? result.state.taxableTotal : 0;
+      setLiveStateTaxableTotal(fetched);
+      setLiveStateFetchedFor(shipToState);
+      setActionMessage(`Live ${shipToState} taxable exposure ${formatCurrency(fetched)} loaded. Impact preview now reflects approved/exported invoices in Supabase.`);
+    } catch {
+      setActionMessage("Live exposure could not be loaded. Check the local server and Supabase connection.");
+    } finally {
+      setLiveStateLoading(false);
+    }
   }
 
   function getCookieValue(name: string) {
@@ -648,6 +692,46 @@ export default function UploadPage() {
             </div>
           </section>
 
+          {savedInvoiceNumber ? (
+            <section className="premium-card flex flex-col gap-3 border border-emerald-200 bg-emerald-50/50 p-5 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-start gap-3">
+                <span className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-emerald-100 text-emerald-700">
+                  <CheckCircle2 className="h-5 w-5" />
+                </span>
+                <div>
+                  <h2 className="text-sm font-bold text-slate-950">
+                    Invoice {savedInvoiceNumber} saved to Supabase
+                  </h2>
+                  <p className="mt-1 text-xs text-slate-600">
+                    {savedReviewStatus === "needs_review"
+                      ? "Sent to the review queue. Counts on Dashboard, Invoices, and Review Queue will reflect this on next refresh."
+                      : "Draft saved. You can keep editing the fields above and send it to review when ready."}
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Link
+                  href={`/invoices/${savedInvoiceNumber.toLowerCase()}`}
+                  className="secondary-button px-3 py-2 text-sm"
+                >
+                  View invoice
+                  <ArrowRight className="h-4 w-4" />
+                </Link>
+                {savedReviewStatus === "needs_review" ? (
+                  <Link href="/review?tab=needs_review" className="primary-button px-3 py-2 text-sm">
+                    Open review queue
+                    <ArrowRight className="h-4 w-4" />
+                  </Link>
+                ) : (
+                  <Link href="/invoices?filter=draft" className="primary-button px-3 py-2 text-sm">
+                    Open drafts
+                    <ArrowRight className="h-4 w-4" />
+                  </Link>
+                )}
+              </div>
+            </section>
+          ) : null}
+
           <section className="premium-card p-5">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-sm text-slate-500">{actionMessage}</p>
@@ -662,9 +746,11 @@ export default function UploadPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setActionMessage("Impact preview refreshed from configured state rules.")}
-                  className="primary-button px-3 py-2 text-sm"
+                  disabled={liveStateLoading || !shipToState}
+                  onClick={() => void previewLiveImpact()}
+                  className="primary-button px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
                 >
+                  {liveStateLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCcw className="h-4 w-4" />}
                   Preview Impact
                 </button>
                 <button
@@ -678,6 +764,17 @@ export default function UploadPage() {
                 </button>
               </div>
             </div>
+            <p className="mt-3 text-xs leading-5 text-slate-500">
+              Impact preview updates automatically as you edit fields and line items. Click <span className="font-semibold">Preview Impact</span> to refresh the
+              ship-to state baseline from approved invoices in Supabase
+              {liveStateFetchedFor && liveStateTaxableTotal !== null ? (
+                <>
+                  {" "}— last refresh: {liveStateFetchedFor} at {formatCurrency(liveStateTaxableTotal)}.
+                </>
+              ) : (
+                "."
+              )}
+            </p>
           </section>
         </div>
 

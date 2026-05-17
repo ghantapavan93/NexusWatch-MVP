@@ -244,6 +244,8 @@ function buildRiskReasons(invoice: Invoice, percentAfterInvoice: number, mayPush
     duplicate_invoice: "Potential duplicate invoice",
     large_invoice: "Large invoice",
     category_review: "Category treatment needs confirmation",
+    negative_amount: "Negative invoice amount",
+    zero_amount: "Zero invoice amount",
   };
   invoice.flags.forEach((flag) => reasons.add(flagLabels[flag]));
   if (!invoice.shipToState) reasons.add("Missing ship-to state");

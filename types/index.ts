@@ -16,7 +16,9 @@ export type ReviewFlag =
   | "crossed_threshold"
   | "duplicate_invoice"
   | "large_invoice"
-  | "category_review";
+  | "category_review"
+  | "negative_amount"
+  | "zero_amount";
 
 export type Company = {
   id: string;

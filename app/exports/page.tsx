@@ -96,8 +96,15 @@ export default function ExportsPage() {
         return;
       }
       setData(result);
-      const requestedInvoice =
-        typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("invoice") ?? "";
+      const search = typeof window === "undefined" ? null : new URLSearchParams(window.location.search);
+      const requestedInvoice = search?.get("invoice") ?? "";
+      const requestedState = search?.get("state") ?? "";
+      const requestedType = search?.get("type") ?? "";
+      const validTypes: ExportType[] = ["state_transactions", "single_invoice", "review_queue", "threshold_summary", "rules_reference"];
+      if (requestedState) setStateCode(requestedState.toUpperCase());
+      if (requestedType && validTypes.includes(requestedType as ExportType)) {
+        setExportType(requestedType as ExportType);
+      }
       if (requestedInvoice) {
         setInvoiceNumber(requestedInvoice);
         setExportType("single_invoice");

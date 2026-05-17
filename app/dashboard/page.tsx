@@ -222,8 +222,8 @@ function CommandHero({
         <div className="mt-8 grid gap-6 md:grid-cols-4">
           <HeroKpi href="/states" icon={<ShieldCheck className="h-8 w-8" />} value={stateCount} label="States Monitored" detail="Configured state rules" />
           <HeroKpi href="/states" icon={<CheckCircle2 className="h-8 w-8" />} value={healthyCount} label="Healthy States" detail="Below configured watch band" />
-          <HeroKpi href="/review" icon={<ClipboardList className="h-8 w-8" />} value={reviewCount} label="Invoices Needing Review" detail="Review queue and extraction items" />
-          <HeroKpi href="/review" icon={<Target className="h-8 w-8" />} value={accountingReviewCount} label="Accounting Review" detail="Awaiting accounting completion" />
+          <HeroKpi href="/review?tab=needs_review" icon={<ClipboardList className="h-8 w-8" />} value={reviewCount} label="Invoices Needing Review" detail="Review queue and extraction items" />
+          <HeroKpi href="/review?tab=accounting_review" icon={<Target className="h-8 w-8" />} value={accountingReviewCount} label="Accounting Review" detail="Awaiting accounting completion" />
         </div>
       </div>
     </section>
@@ -247,12 +247,12 @@ function RecommendedActions({
     {
       title: `Review ${highestRiskState?.stateName ?? "highest risk"} invoices in the review queue`,
       detail: `${reviewCount} invoices need attention`,
-      href: "/review",
+      href: "/review?tab=needs_review",
     },
     {
       title: "Complete Accounting Review items",
       detail: `${accountingReviewCount} invoices in accounting review`,
-      href: "/review",
+      href: "/review?tab=accounting_review",
     },
     {
       title: "Export approved invoices only",
@@ -262,7 +262,7 @@ function RecommendedActions({
     {
       title: "Review OCR detected fields before approval",
       detail: ocrCount ? `${ocrCount} OCR items need review` : highestRiskInvoice ? `Confirm invoice ${highestRiskInvoice}` : "Confirm accuracy of extracted data",
-      href: ocrCount ? "/invoices?filter=ocr_needs_review" : "/invoices",
+      href: ocrCount ? "/review?tab=ocr_needs_review" : "/invoices?filter=approved",
     },
   ];
 

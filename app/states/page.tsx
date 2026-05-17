@@ -222,11 +222,14 @@ function StateExposureTable({
           <p className="mt-1 text-xs text-slate-500">75% and 90% markers show configured exposure bands.</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <span className="secondary-button px-3 py-2 text-xs">
+          <Link href="/rules" className="secondary-button px-3 py-2 text-xs">
             <Gauge className="h-4 w-4" />
             Configure States
-          </span>
-          <span className="secondary-button px-3 py-2 text-xs">All States</span>
+          </Link>
+          <Link href="/exports?type=threshold_summary" className="secondary-button px-3 py-2 text-xs">
+            <Download className="h-4 w-4" />
+            Export threshold summary
+          </Link>
         </div>
       </div>
       <div className="overflow-x-auto">

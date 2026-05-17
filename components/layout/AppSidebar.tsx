@@ -57,7 +57,12 @@ export function AppSidebar() {
       <div className="m-5 hidden rounded-xl border border-white/10 bg-white/[0.045] p-5 text-xs leading-5 text-slate-300 shadow-inner lg:block">
         <div className="mb-2 font-semibold text-white">Decision support only.</div>
         Final tax treatment should be reviewed with accounting.
-        <div className="mt-4 font-semibold text-blue-200">Learn more →</div>
+        <Link
+          href="/settings"
+          className="mt-4 inline-flex items-center gap-1 font-semibold text-blue-200 hover:text-blue-100"
+        >
+          Open settings &rarr;
+        </Link>
       </div>
     </aside>
   );
