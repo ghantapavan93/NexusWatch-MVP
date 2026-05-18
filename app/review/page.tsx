@@ -1,12 +1,12 @@
 import { PageHeader } from "@/components/layout/PageHeader";
 import { PremiumReviewQueueTable } from "@/components/review/PremiumReviewQueueTable";
 import { ReviewHeaderActions, ReviewSummaryCard } from "@/components/review/ReviewHeaderActions";
-import { getNexusWatchData } from "@/lib/supabaseData";
+import { getScopedNexusWatchData } from "@/lib/supabaseData";
 
 export const dynamic = "force-dynamic";
 
 export default async function ReviewPage() {
-  const { invoices, rules } = await getNexusWatchData();
+  const { invoices, rules } = await getScopedNexusWatchData();
   const reviewInvoices = invoices.filter(
     (invoice) =>
       invoice.reviewStatus === "needs_review" ||

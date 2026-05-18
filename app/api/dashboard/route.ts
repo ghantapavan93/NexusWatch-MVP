@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
 import { buildStateSummaries } from "@/lib/nexus";
-import { getNexusWatchData } from "@/lib/supabaseData";
+import { getScopedNexusWatchData } from "@/lib/supabaseData";
+
+export const dynamic = "force-dynamic";
 
 export async function GET() {
-  const { invoices, rules, source } = await getNexusWatchData();
+  const { invoices, rules, source } = await getScopedNexusWatchData();
   const states = buildStateSummaries(rules, invoices);
   const reviewInvoices = invoices.filter((invoice) => invoice.reviewStatus === "needs_review");
 

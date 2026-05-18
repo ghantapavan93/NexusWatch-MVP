@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { cookies } from "next/headers";
 import type { ReactNode } from "react";
 import {
   AlertTriangle,
@@ -25,7 +24,7 @@ import { StatusBadge } from "@/components/shared/StatusBadge";
 import { generateAiBrief } from "@/lib/aiBrief";
 import { formatCurrency, formatPercent } from "@/lib/format";
 import { buildStateSummaries } from "@/lib/nexus";
-import { getNexusWatchData } from "@/lib/supabaseData";
+import { getScopedNexusWatchData } from "@/lib/supabaseData";
 import {
   buildInvoiceThresholdImpact,
   buildStateExposureDetails,
@@ -80,13 +79,8 @@ const statusTone: Record<ThresholdStatus, { bar: string; text: string; panel: st
 };
 
 export default async function DashboardPage() {
-  const cookieStore = await cookies();
-  const requestedDataMode = cookieStore.get("nexuswatch_data_mode")?.value === "demo" ? "demo" : "live";
-  const liveInvoiceNumbers = parseLiveInvoiceNumbers(cookieStore.get("nexuswatch_live_invoice_numbers")?.value);
-  const { invoices, rules, source } = await getNexusWatchData({
-    mode: requestedDataMode,
-    liveInvoiceNumbers: requestedDataMode === "live" ? liveInvoiceNumbers : undefined,
-  });
+  const { invoices, rules, source, scope } = await getScopedNexusWatchData();
+  const requestedDataMode = scope.mode;
   const states = buildStateSummaries(rules, invoices).sort((a, b) => b.percentUsed - a.percentUsed);
   const stateExposure = rules
     .map((rule) => buildStateExposureDetails(rule, invoices))
@@ -572,10 +566,3 @@ function MetricLine({ label, value, danger = false }: { label: string; value: st
   );
 }
 
-function parseLiveInvoiceNumbers(value?: string) {
-  if (!value) return [];
-  return decodeURIComponent(value)
-    .split(",")
-    .map((invoiceNumber) => invoiceNumber.trim())
-    .filter(Boolean);
-}

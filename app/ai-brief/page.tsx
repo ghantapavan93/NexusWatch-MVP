@@ -5,13 +5,13 @@ import { StatusBadge } from "@/components/shared/StatusBadge";
 import { generateAiBrief } from "@/lib/aiBrief";
 import { formatCurrency } from "@/lib/format";
 import { buildStateSummaries } from "@/lib/nexus";
-import { getNexusWatchData } from "@/lib/supabaseData";
+import { getScopedNexusWatchData } from "@/lib/supabaseData";
 import { isNormalExportEligible, isReviewQueueInvoice } from "@/lib/thresholdImpact";
 
 export const dynamic = "force-dynamic";
 
 export default async function AiBriefPage() {
-  const { invoices, rules } = await getNexusWatchData();
+  const { invoices, rules } = await getScopedNexusWatchData();
   const summaries = buildStateSummaries(rules, invoices).sort((a, b) => b.percentUsed - a.percentUsed);
   const totalTaxable = summaries.reduce((sum, state) => sum + state.taxableTotal, 0);
   const reviewQueueCount = invoices.filter(isReviewQueueInvoice).length;

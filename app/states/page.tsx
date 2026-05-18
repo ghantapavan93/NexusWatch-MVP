@@ -15,7 +15,7 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { StatusBadge } from "@/components/shared/StatusBadge";
 import { formatCurrency, formatPercent } from "@/lib/format";
 import { buildStateSummaries } from "@/lib/nexus";
-import { getNexusWatchData } from "@/lib/supabaseData";
+import { getScopedNexusWatchData } from "@/lib/supabaseData";
 import { buildStateExposureDetails } from "@/lib/thresholdImpact";
 import type { StateNexusSummary, ThresholdStatus } from "@/types";
 
@@ -63,7 +63,7 @@ const statusTone: Record<ThresholdStatus, { bar: string; icon: string; panel: st
 };
 
 export default async function StatesPage() {
-  const { invoices, rules } = await getNexusWatchData();
+  const { invoices, rules } = await getScopedNexusWatchData();
   const states = buildStateSummaries(rules, invoices);
   const exposureByState = new Map(rules.map((rule) => [rule.stateCode, buildStateExposureDetails(rule, invoices)]));
   const sortedStates = [...states].sort((a, b) => b.percentUsed - a.percentUsed);

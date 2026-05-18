@@ -7,14 +7,14 @@ import { StatusBadge } from "@/components/shared/StatusBadge";
 import { generateAiBrief } from "@/lib/aiBrief";
 import { formatCurrency, formatDate, formatPercent } from "@/lib/format";
 import { buildStateSummaries, getExcludedAmount, previewInvoiceImpact } from "@/lib/nexus";
-import { getNexusWatchData } from "@/lib/supabaseData";
+import { getScopedNexusWatchData } from "@/lib/supabaseData";
 import { buildInvoiceThresholdImpact, hasDetectedMismatch, hasLowConfidence } from "@/lib/thresholdImpact";
 
 export const dynamic = "force-dynamic";
 
 export default async function InvoiceDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const { invoices, rules } = await getNexusWatchData();
+  const { invoices, rules } = await getScopedNexusWatchData();
   const invoice = invoices.find((item) => item.id === id || item.invoiceNumber.toLowerCase() === id.toLowerCase());
   if (!invoice) notFound();
 

@@ -5,7 +5,7 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { StatusBadge } from "@/components/shared/StatusBadge";
 import { formatCurrency, formatDate, formatPercent, stateLabel } from "@/lib/format";
 import { buildStateSummaries } from "@/lib/nexus";
-import { getNexusWatchData } from "@/lib/supabaseData";
+import { getScopedNexusWatchData } from "@/lib/supabaseData";
 import { buildStateExposureDetails, getInvoiceActivityDate } from "@/lib/thresholdImpact";
 
 export const dynamic = "force-dynamic";
@@ -13,7 +13,7 @@ export const dynamic = "force-dynamic";
 export default async function StateDetailPage({ params }: { params: Promise<{ state: string }> }) {
   const { state: stateParam } = await params;
   const code = stateParam.toUpperCase();
-  const { invoices, rules } = await getNexusWatchData();
+  const { invoices, rules } = await getScopedNexusWatchData();
   const state = buildStateSummaries(rules, invoices).find((item) => item.stateCode === code);
   const rule = rules.find((item) => item.stateCode === code);
   if (!state || !rule) notFound();

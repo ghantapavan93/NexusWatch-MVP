@@ -1,3 +1,4 @@
+import { cookies } from "next/headers";
 import { demoCompany, demoInvoices, demoRules } from "@/lib/demoData";
 import { createSupabaseClient, isSupabaseConfigured } from "@/lib/supabase";
 import type { Category, Company, ExportHistory, Invoice, InvoiceStatus, LineItem, NexusRule, OperationalStatus, ReviewFlag, ThresholdStatus } from "@/types";
@@ -96,6 +97,27 @@ export type NexusWatchData = {
 };
 
 export type NexusWatchDataMode = "demo" | "live";
+
+export type RequestedDataScope = { mode: NexusWatchDataMode; liveInvoiceNumbers?: string[] };
+
+export async function getRequestedDataScope(): Promise<RequestedDataScope> {
+  const cookieStore = await cookies();
+  const mode: NexusWatchDataMode = cookieStore.get("nexuswatch_data_mode")?.value === "demo" ? "demo" : "live";
+  const raw = cookieStore.get("nexuswatch_live_invoice_numbers")?.value;
+  const liveInvoiceNumbers = raw
+    ? decodeURIComponent(raw)
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean)
+    : [];
+  return { mode, liveInvoiceNumbers: mode === "live" ? liveInvoiceNumbers : undefined };
+}
+
+export async function getScopedNexusWatchData(): Promise<NexusWatchData & { scope: RequestedDataScope }> {
+  const scope = await getRequestedDataScope();
+  const data = await getNexusWatchData(scope);
+  return { ...data, scope };
+}
 
 let cachedData: { data: NexusWatchData; expiresAt: number } | null = null;
 const CACHE_MS = 5000;
