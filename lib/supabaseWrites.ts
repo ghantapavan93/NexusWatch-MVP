@@ -1,3 +1,4 @@
+import { getAppSettings } from "@/lib/appSettings";
 import { demoCompany } from "@/lib/demoData";
 import { roundCurrency } from "@/lib/format";
 import { buildStateSummaries, isLineTaxable, previewInvoiceImpact } from "@/lib/nexus";
@@ -14,6 +15,8 @@ const REVIEW_FLAG_MESSAGES: Record<ReviewFlag, string> = {
   duplicate_invoice: "Potential duplicate invoice number detected.",
   large_invoice: "Large invoice recommended for accounting review.",
   category_review: "Category treatment should be confirmed with accounting.",
+  negative_amount: "Negative total or line amount detected; review for credits or refunds.",
+  zero_amount: "Zero total or line amount detected; confirm before approval.",
 };
 
 type WritableLineItem = {
@@ -69,6 +72,7 @@ export async function createSupabaseInvoice(input: WritableInvoiceInput) {
   }
 
   const { invoices, rules } = await getNexusWatchData();
+  const appSettings = await getAppSettings();
   const companyId = process.env.NEXT_PUBLIC_DEMO_COMPANY_ID ?? demoCompany.id;
   const shipToState = normalizeState(input.shipToState);
   const billToState = normalizeState(input.billToState);
@@ -84,10 +88,16 @@ export async function createSupabaseInvoice(input: WritableInvoiceInput) {
     rule,
     invoices,
     rules,
+    largeInvoiceThreshold: appSettings.largeInvoiceThreshold,
+    watchBandPercent: appSettings.watchBandPercent,
+    warningBandPercent: appSettings.warningBandPercent,
   });
   const reviewStatus = getReviewStatus(input.reviewStatus ?? input.requestedStatus, flags);
   const status = input.status ?? getOperationalStatus(reviewStatus);
-  const riskStatus = getRiskStatus(rule, shipToState, totals.taxableAmount, reviewStatus, invoices, rules);
+  const riskStatus = getRiskStatus(rule, shipToState, totals.taxableAmount, reviewStatus, invoices, rules, {
+    watchBandPercent: appSettings.watchBandPercent,
+    warningBandPercent: appSettings.warningBandPercent,
+  });
 
   const invoicePayload = {
     company_id: companyId,
@@ -157,7 +167,12 @@ export async function createSupabaseInvoice(input: WritableInvoiceInput) {
         invoice_id: invoice.id,
         state_code: shipToState,
         flag_type: flag,
-        severity: flag === "ship_bill_mismatch" ? "info" : "high",
+        severity:
+          flag === "ship_bill_mismatch" || flag === "zero_amount"
+            ? "info"
+            : flag === "negative_amount" || flag === "crossed_threshold"
+              ? "high"
+              : "high",
         message: REVIEW_FLAG_MESSAGES[flag],
       }))
     );
@@ -396,6 +411,195 @@ async function updateInvoiceWithOptionalReviewFields(
   return update(fallbackPayload);
 }
 
+export type WritableNexusRuleUpdate = {
+  stateCode: string;
+  thresholdAmount?: number;
+  saasTaxable?: boolean;
+  hardwareTaxable?: boolean;
+  servicesTaxable?: boolean;
+  notes?: string | null;
+  sourceUrl?: string | null;
+  lastReviewed?: string | null;
+};
+
+export async function updateSupabaseNexusRule(input: WritableNexusRuleUpdate) {
+  if (!isSupabaseConfigured()) {
+    return { ok: false as const, status: 503, message: "Supabase is not configured. Rule was not saved." };
+  }
+  const supabase = createSupabaseClient();
+  if (!supabase) {
+    return { ok: false as const, status: 503, message: "Supabase client is unavailable. Rule was not saved." };
+  }
+
+  const companyId = process.env.NEXT_PUBLIC_DEMO_COMPANY_ID ?? demoCompany.id;
+  const stateCode = input.stateCode.toUpperCase();
+
+  const { data: previous, error: lookupError } = await supabase
+    .from("nexus_rules")
+    .select("id,state_code,state_name,threshold_amount,saas_taxable,hardware_taxable,services_taxable,notes,source_url,last_reviewed")
+    .eq("company_id", companyId)
+    .eq("state_code", stateCode)
+    .single();
+
+  if (lookupError || !previous) {
+    return { ok: false as const, status: 404, message: `Rule for ${stateCode} not found.` };
+  }
+
+  const update: Record<string, unknown> = { last_reviewed: input.lastReviewed ?? new Date().toISOString().slice(0, 10) };
+  if (typeof input.thresholdAmount === "number" && Number.isFinite(input.thresholdAmount)) {
+    update.threshold_amount = roundCurrency(input.thresholdAmount);
+  }
+  if (typeof input.saasTaxable === "boolean") update.saas_taxable = input.saasTaxable;
+  if (typeof input.hardwareTaxable === "boolean") update.hardware_taxable = input.hardwareTaxable;
+  if (typeof input.servicesTaxable === "boolean") update.services_taxable = input.servicesTaxable;
+  if (input.notes !== undefined) update.notes = input.notes;
+  if (input.sourceUrl !== undefined) update.source_url = input.sourceUrl || null;
+
+  const { data: updated, error: updateError } = await supabase
+    .from("nexus_rules")
+    .update(update)
+    .eq("company_id", companyId)
+    .eq("id", previous.id)
+    .select("id,state_code,state_name,threshold_amount,saas_taxable,hardware_taxable,services_taxable,notes,source_url,last_reviewed")
+    .single();
+
+  if (updateError || !updated) {
+    return { ok: false as const, status: 500, message: updateError?.message ?? "Rule could not be saved." };
+  }
+
+  await supabase.from("audit_logs").insert({
+    company_id: companyId,
+    entity_type: "nexus_rule",
+    entity_id: updated.id,
+    action: "rule_updated",
+    actor: "Sara Demo User",
+    message: `Nexus rule for ${stateCode} updated.`,
+    metadata: {
+      state_code: stateCode,
+      previous: {
+        threshold_amount: previous.threshold_amount,
+        saas_taxable: previous.saas_taxable,
+        hardware_taxable: previous.hardware_taxable,
+        services_taxable: previous.services_taxable,
+        notes: previous.notes,
+        source_url: previous.source_url,
+      },
+      next: {
+        threshold_amount: updated.threshold_amount,
+        saas_taxable: updated.saas_taxable,
+        hardware_taxable: updated.hardware_taxable,
+        services_taxable: updated.services_taxable,
+        notes: updated.notes,
+        source_url: updated.source_url,
+      },
+      source: "rules_editor",
+    },
+  });
+
+  clearNexusWatchDataCache();
+
+  return {
+    ok: true as const,
+    status: 200,
+    message: `Nexus rule for ${stateCode} saved to Supabase.`,
+    rule: {
+      id: updated.id,
+      stateCode: updated.state_code,
+      stateName: updated.state_name,
+      thresholdAmount: Number(updated.threshold_amount),
+      saasTaxable: updated.saas_taxable,
+      hardwareTaxable: updated.hardware_taxable,
+      servicesTaxable: updated.services_taxable,
+      notes: updated.notes ?? undefined,
+      sourceUrl: updated.source_url ?? undefined,
+      lastReviewed: updated.last_reviewed ?? undefined,
+    },
+  };
+}
+
+export async function appendSupabaseInvoiceReviewNote(
+  invoiceId: string,
+  note: string,
+  options: { auditSource?: string } = {}
+) {
+  const trimmedNote = note.trim();
+  if (!trimmedNote) {
+    return { ok: false as const, status: 400, message: "Review note cannot be empty." };
+  }
+  if (!isSupabaseConfigured()) {
+    return { ok: false as const, status: 503, message: "Supabase is not configured. Review note was not saved." };
+  }
+
+  const supabase = createSupabaseClient();
+  if (!supabase) {
+    return { ok: false as const, status: 503, message: "Supabase client is unavailable. Review note was not saved." };
+  }
+
+  const companyId = process.env.NEXT_PUBLIC_DEMO_COMPANY_ID ?? demoCompany.id;
+
+  let resolvedInvoiceId = invoiceId;
+  if (!isUuid(invoiceId)) {
+    const { invoices } = await getNexusWatchData();
+    const invoice = invoices.find(
+      (item) => item.id === invoiceId || item.invoiceNumber.toLowerCase() === invoiceId.toLowerCase()
+    );
+    if (!invoice) return { ok: false as const, status: 404, message: "Invoice not found." };
+    const { data: matched } = await supabase
+      .from("invoices")
+      .select("id,invoice_number,review_notes")
+      .eq("company_id", companyId)
+      .eq("invoice_number", invoice.invoiceNumber)
+      .single();
+    if (!matched) return { ok: false as const, status: 404, message: "Invoice not found in Supabase." };
+    resolvedInvoiceId = matched.id;
+  }
+
+  const { data: existing } = await supabase
+    .from("invoices")
+    .select("id,invoice_number,review_notes")
+    .eq("company_id", companyId)
+    .eq("id", resolvedInvoiceId)
+    .single();
+  if (!existing) return { ok: false as const, status: 404, message: "Invoice not found." };
+
+  const timestamp = new Date().toISOString();
+  const formattedEntry = `[${timestamp}] Sara Demo User: ${trimmedNote}`;
+  const nextNotes = existing.review_notes ? `${existing.review_notes}\n${formattedEntry}` : formattedEntry;
+
+  const { error: updateError } = await supabase
+    .from("invoices")
+    .update({ review_notes: nextNotes, updated_at: timestamp })
+    .eq("company_id", companyId)
+    .eq("id", resolvedInvoiceId);
+
+  if (updateError && !isMissingReviewColumnError(updateError)) {
+    return { ok: false as const, status: 500, message: updateError.message };
+  }
+
+  await supabase.from("audit_logs").insert({
+    company_id: companyId,
+    entity_type: "invoice",
+    entity_id: resolvedInvoiceId,
+    action: "review_note_added",
+    actor: "Sara Demo User",
+    message: `Review note added to invoice ${existing.invoice_number}.`,
+    metadata: {
+      invoice_number: existing.invoice_number,
+      note: trimmedNote,
+      source: options.auditSource ?? "review_queue",
+    },
+  });
+
+  clearNexusWatchDataCache();
+
+  return {
+    ok: true as const,
+    status: 200,
+    message: "Review note saved to Supabase.",
+    invoice: { id: resolvedInvoiceId, invoiceNumber: existing.invoice_number },
+  };
+}
+
 export async function recordSupabaseExport(input: {
   exportType: string;
   stateCode?: string;
@@ -419,9 +623,29 @@ export async function recordSupabaseExport(input: {
     file_name: input.fileName ?? buildExportFileName(input.exportType),
   };
 
-  const { error } = await supabase.from("exports").insert(payload);
+  const { data: insertedRows, error } = await supabase.from("exports").insert(payload).select("id").limit(1);
 
   if (error) return { ok: false as const, message: error.message };
+
+  const insertedId = Array.isArray(insertedRows) && insertedRows[0]?.id ? String(insertedRows[0].id) : null;
+
+  await supabase.from("audit_logs").insert({
+    company_id: payload.company_id,
+    entity_type: "export",
+    entity_id: insertedId,
+    action: "export_generated",
+    actor: "Sara Demo User",
+    message: `${payload.export_type} export generated (${input.rowCount} rows).`,
+    metadata: {
+      export_type: payload.export_type,
+      state_code: payload.state_code,
+      date_from: payload.date_from,
+      date_to: payload.date_to,
+      row_count: input.rowCount,
+      file_name: payload.file_name,
+    },
+  });
+
   clearNexusWatchDataCache();
   return { ok: true as const, message: "Export history saved to Supabase." };
 }
@@ -452,6 +676,9 @@ function buildWritableFlags({
   rule,
   invoices,
   rules,
+  largeInvoiceThreshold,
+  watchBandPercent,
+  warningBandPercent,
 }: {
   invoiceNumber: string;
   lineItems: WritableLineItem[];
@@ -462,6 +689,9 @@ function buildWritableFlags({
   rule?: NexusRule;
   invoices: Awaited<ReturnType<typeof getNexusWatchData>>["invoices"];
   rules: NexusRule[];
+  largeInvoiceThreshold: number;
+  watchBandPercent: number;
+  warningBandPercent: number;
 }) {
   const flags = new Set<ReviewFlag>();
   if (!shipToState) flags.add("missing_ship_to");
@@ -470,10 +700,18 @@ function buildWritableFlags({
     flags.add("category_review");
   }
   if (shipToState && billToState && shipToState !== billToState) flags.add("ship_bill_mismatch");
-  if (Math.abs(totalAmount) >= 50000) flags.add("large_invoice");
+  if (Math.abs(totalAmount) >= largeInvoiceThreshold) flags.add("large_invoice");
   if (invoices.some((invoice) => invoice.invoiceNumber.toLowerCase() === invoiceNumber.toLowerCase())) {
     flags.add("duplicate_invoice");
   }
+  if (totalAmount < 0 || lineItems.some((item) => item.amount < 0)) {
+    flags.add("negative_amount");
+  }
+  if (totalAmount === 0 || lineItems.some((item) => item.amount === 0)) {
+    flags.add("zero_amount");
+  }
+  void watchBandPercent;
+  void warningBandPercent;
 
   if (rule && shipToState) {
     const stateSummary = buildStateSummaries(rules, invoices).find((item) => item.stateCode === shipToState);
@@ -508,11 +746,19 @@ function getRiskStatus(
   taxableAmount: number,
   reviewStatus: InvoiceStatus,
   invoices: Awaited<ReturnType<typeof getNexusWatchData>>["invoices"],
-  rules: NexusRule[]
+  rules: NexusRule[],
+  bands?: { watchBandPercent?: number; warningBandPercent?: number }
 ) {
   if (!rule || !shipToState) return reviewStatus === "needs_review" ? "needs_review" : "safe";
   const stateSummary = buildStateSummaries(rules, invoices).find((item) => item.stateCode === shipToState);
-  return previewInvoiceImpact(stateSummary?.taxableTotal ?? 0, taxableAmount, rule.thresholdAmount).after.status;
+  const impact = previewInvoiceImpact(stateSummary?.taxableTotal ?? 0, taxableAmount, rule.thresholdAmount);
+  const percent = impact.after.percent;
+  const warning = bands?.warningBandPercent ?? 90;
+  const watch = bands?.watchBandPercent ?? 75;
+  if (percent >= 100) return "crossed";
+  if (percent >= warning) return "warning";
+  if (percent >= watch) return "watch";
+  return "safe";
 }
 
 function normalizeState(value?: string | null) {

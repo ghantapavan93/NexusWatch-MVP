@@ -5,16 +5,18 @@ export function roundCurrency(value: number) {
   return Math.round(value * 100) / 100;
 }
 
-export function formatCurrency(value: number) {
+export function formatCurrency(value: number | null | undefined) {
+  const safe = typeof value === "number" && Number.isFinite(value) ? value : 0;
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
     maximumFractionDigits: 0,
-  }).format(value);
+  }).format(safe);
 }
 
-export function formatPercent(value: number) {
-  return `${value.toFixed(1)}%`;
+export function formatPercent(value: number | null | undefined) {
+  const safe = typeof value === "number" && Number.isFinite(value) ? value : 0;
+  return `${safe.toFixed(1)}%`;
 }
 
 export function formatDate(value?: string | null) {

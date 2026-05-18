@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { cookies } from "next/headers";
 import type { ReactNode } from "react";
 import {
   AlertTriangle,
@@ -25,7 +24,7 @@ import { StatusBadge } from "@/components/shared/StatusBadge";
 import { generateAiBrief } from "@/lib/aiBrief";
 import { formatCurrency, formatPercent } from "@/lib/format";
 import { buildStateSummaries } from "@/lib/nexus";
-import { getNexusWatchData } from "@/lib/supabaseData";
+import { getScopedNexusWatchData } from "@/lib/supabaseData";
 import {
   buildInvoiceThresholdImpact,
   buildStateExposureDetails,
@@ -80,13 +79,8 @@ const statusTone: Record<ThresholdStatus, { bar: string; text: string; panel: st
 };
 
 export default async function DashboardPage() {
-  const cookieStore = await cookies();
-  const requestedDataMode = cookieStore.get("nexuswatch_data_mode")?.value === "demo" ? "demo" : "live";
-  const liveInvoiceNumbers = parseLiveInvoiceNumbers(cookieStore.get("nexuswatch_live_invoice_numbers")?.value);
-  const { invoices, rules, source } = await getNexusWatchData({
-    mode: requestedDataMode,
-    liveInvoiceNumbers: requestedDataMode === "live" ? liveInvoiceNumbers : undefined,
-  });
+  const { invoices, rules, source, scope } = await getScopedNexusWatchData();
+  const requestedDataMode = scope.mode;
   const states = buildStateSummaries(rules, invoices).sort((a, b) => b.percentUsed - a.percentUsed);
   const stateExposure = rules
     .map((rule) => buildStateExposureDetails(rule, invoices))
@@ -222,8 +216,8 @@ function CommandHero({
         <div className="mt-8 grid gap-6 md:grid-cols-4">
           <HeroKpi href="/states" icon={<ShieldCheck className="h-8 w-8" />} value={stateCount} label="States Monitored" detail="Configured state rules" />
           <HeroKpi href="/states" icon={<CheckCircle2 className="h-8 w-8" />} value={healthyCount} label="Healthy States" detail="Below configured watch band" />
-          <HeroKpi href="/review" icon={<ClipboardList className="h-8 w-8" />} value={reviewCount} label="Invoices Needing Review" detail="Review queue and extraction items" />
-          <HeroKpi href="/review" icon={<Target className="h-8 w-8" />} value={accountingReviewCount} label="Accounting Review" detail="Awaiting accounting completion" />
+          <HeroKpi href="/review?tab=needs_review" icon={<ClipboardList className="h-8 w-8" />} value={reviewCount} label="Invoices Needing Review" detail="Review queue and extraction items" />
+          <HeroKpi href="/review?tab=accounting_review" icon={<Target className="h-8 w-8" />} value={accountingReviewCount} label="Accounting Review" detail="Awaiting accounting completion" />
         </div>
       </div>
     </section>
@@ -247,12 +241,12 @@ function RecommendedActions({
     {
       title: `Review ${highestRiskState?.stateName ?? "highest risk"} invoices in the review queue`,
       detail: `${reviewCount} invoices need attention`,
-      href: "/review",
+      href: "/review?tab=needs_review",
     },
     {
       title: "Complete Accounting Review items",
       detail: `${accountingReviewCount} invoices in accounting review`,
-      href: "/review",
+      href: "/review?tab=accounting_review",
     },
     {
       title: "Export approved invoices only",
@@ -262,7 +256,7 @@ function RecommendedActions({
     {
       title: "Review OCR detected fields before approval",
       detail: ocrCount ? `${ocrCount} OCR items need review` : highestRiskInvoice ? `Confirm invoice ${highestRiskInvoice}` : "Confirm accuracy of extracted data",
-      href: ocrCount ? "/invoices?filter=ocr_needs_review" : "/invoices",
+      href: ocrCount ? "/review?tab=ocr_needs_review" : "/invoices?filter=approved",
     },
   ];
 
@@ -572,10 +566,3 @@ function MetricLine({ label, value, danger = false }: { label: string; value: st
   );
 }
 
-function parseLiveInvoiceNumbers(value?: string) {
-  if (!value) return [];
-  return decodeURIComponent(value)
-    .split(",")
-    .map((invoiceNumber) => invoiceNumber.trim())
-    .filter(Boolean);
-}

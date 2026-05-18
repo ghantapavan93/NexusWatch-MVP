@@ -20,6 +20,16 @@ const statusStyles: Record<string, string> = {
   extraction_failed: "bg-red-50 text-red-700 ring-red-200",
   low_confidence: "bg-amber-50 text-amber-700 ring-amber-200",
   missing_field: "bg-blue-50 text-blue-700 ring-blue-200",
+  negative_amount: "bg-red-50 text-red-700 ring-red-200",
+  zero_amount: "bg-amber-50 text-amber-700 ring-amber-200",
+  missing_ship_to: "bg-blue-50 text-blue-700 ring-blue-200",
+  missing_category: "bg-blue-50 text-blue-700 ring-blue-200",
+  ship_bill_mismatch: "bg-amber-50 text-amber-700 ring-amber-200",
+  may_cross_threshold: "bg-orange-50 text-orange-700 ring-orange-200",
+  crossed_threshold: "bg-red-50 text-red-700 ring-red-200",
+  duplicate_invoice: "bg-violet-50 text-violet-700 ring-violet-200",
+  large_invoice: "bg-orange-50 text-orange-700 ring-orange-200",
+  category_review: "bg-blue-50 text-blue-700 ring-blue-200",
 };
 
 const labels: Record<string, string> = {
@@ -50,6 +60,8 @@ const labels: Record<string, string> = {
   duplicate_invoice: "Duplicate",
   large_invoice: "Large Invoice",
   category_review: "Category Review",
+  negative_amount: "Negative Amount",
+  zero_amount: "Zero Amount",
 };
 
 export function StatusBadge({ status }: { status: ThresholdStatus | InvoiceStatus | ReviewFlag | "needs_review" | string }) {

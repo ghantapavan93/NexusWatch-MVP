@@ -7,30 +7,40 @@ import { StatusBadge } from "@/components/shared/StatusBadge";
 import { generateAiBrief } from "@/lib/aiBrief";
 import { formatCurrency, formatDate, formatPercent } from "@/lib/format";
 import { buildStateSummaries, getExcludedAmount, previewInvoiceImpact } from "@/lib/nexus";
-import { getNexusWatchData } from "@/lib/supabaseData";
+import { getScopedNexusWatchData } from "@/lib/supabaseData";
 import { buildInvoiceThresholdImpact, hasDetectedMismatch, hasLowConfidence } from "@/lib/thresholdImpact";
 
 export const dynamic = "force-dynamic";
 
 export default async function InvoiceDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  const { invoices, rules } = await getNexusWatchData();
+  const { invoices, rules } = await getScopedNexusWatchData();
   const invoice = invoices.find((item) => item.id === id || item.invoiceNumber.toLowerCase() === id.toLowerCase());
   if (!invoice) notFound();
 
-  const rule = rules.find((item) => item.stateCode === invoice.shipToState) ?? rules[0];
+  const fallbackRule = {
+    id: "no-rule",
+    companyId: invoice.companyId,
+    stateCode: invoice.shipToState ?? "--",
+    stateName: invoice.shipToState ?? "No configured state",
+    thresholdAmount: 0,
+    saasTaxable: false,
+    hardwareTaxable: false,
+    servicesTaxable: false,
+  };
+  const rule = rules.find((item) => item.stateCode === invoice.shipToState) ?? rules[0] ?? fallbackRule;
   const stateSummary = buildStateSummaries(rules, invoices).find((item) => item.stateCode === rule.stateCode);
   const thresholdImpact = buildInvoiceThresholdImpact(invoice, invoices, rules);
   const currentTaxableTotal = thresholdImpact.currentExposureBeforeInvoice;
   const impact = previewInvoiceImpact(currentTaxableTotal, invoice.taxableAmount, thresholdImpact.thresholdAmount);
-  const lineCountedAmount = invoice.lineItems.reduce((sum, item) => sum + (item.taxableAmount ?? 0), 0);
+  const lineCountedAmount = (invoice.lineItems ?? []).reduce((sum, item) => sum + (item.taxableAmount ?? 0), 0);
   const brief = generateAiBrief({
     state: rule.stateName,
     percent: stateSummary?.percentUsed ?? 0,
     invoiceNumber: invoice.invoiceNumber,
     taxableAmount: invoice.taxableAmount,
     status: invoice.riskStatus,
-    mayPushOver: invoice.flags.includes("may_cross_threshold"),
+    mayPushOver: (invoice.flags ?? []).includes("may_cross_threshold"),
   });
 
   return (
@@ -150,17 +160,38 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
           </section>
 
           <section className="premium-card p-5">
-            <h2 className="text-sm font-semibold text-slate-950">Review Flags</h2>
-            <div className="mt-4 flex flex-wrap gap-2">
-              <StatusBadge status="may_cross_threshold" />
-              <StatusBadge status="large_invoice" />
-              <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 ring-1 ring-inset ring-blue-200">
-                Accounting Review Needed
+            <div className="flex items-center justify-between gap-3">
+              <h2 className="text-sm font-semibold text-slate-950">Review Flags</h2>
+              <span className="text-xs font-semibold text-slate-500">
+                {(invoice.flags?.length ?? 0)} active flag{(invoice.flags?.length ?? 0) === 1 ? "" : "s"}
               </span>
             </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              {(invoice.flags ?? []).length ? (
+                (invoice.flags ?? []).map((flag) => <StatusBadge key={flag} status={flag} />)
+              ) : (
+                <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-200">
+                  No review flags raised
+                </span>
+              )}
+              {invoice.reviewStatus === "accounting_review" ? (
+                <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700 ring-1 ring-inset ring-blue-200">
+                  In Accounting Review
+                </span>
+              ) : null}
+              {invoice.extractionStatus === "ocr_needs_review" ? (
+                <StatusBadge status="ocr_needs_review" />
+              ) : null}
+            </div>
             <p className="mt-4 text-sm leading-6 text-slate-600">
-              This invoice is evaluated against the configured {rule.stateName} demo rule. Mixed taxable and excluded line items remain review based until approved.
+              Evaluated against the configured {rule.stateName} rule. Mixed taxable and excluded line items remain review based until approved.
             </p>
+            {thresholdImpact.riskReasons.length ? (
+              <div className="mt-4 rounded-md bg-slate-50 p-3 text-xs leading-5 text-slate-600">
+                <span className="font-semibold text-slate-900">Why flagged: </span>
+                {thresholdImpact.riskReasons.join("; ")}
+              </div>
+            ) : null}
           </section>
 
           <section className="premium-card p-5">
@@ -255,7 +286,7 @@ export default async function InvoiceDetailPage({ params }: { params: Promise<{ 
             ) : null}
           </section>
 
-          <InvoiceActions invoiceId={invoice.id} shipToState={invoice.shipToState} />
+          <InvoiceActions invoiceId={invoice.id} invoiceNumber={invoice.invoiceNumber} shipToState={invoice.shipToState} />
         </div>
 
         <aside className="space-y-6">

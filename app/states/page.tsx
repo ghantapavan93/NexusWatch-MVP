@@ -15,7 +15,7 @@ import { PageHeader } from "@/components/layout/PageHeader";
 import { StatusBadge } from "@/components/shared/StatusBadge";
 import { formatCurrency, formatPercent } from "@/lib/format";
 import { buildStateSummaries } from "@/lib/nexus";
-import { getNexusWatchData } from "@/lib/supabaseData";
+import { getScopedNexusWatchData } from "@/lib/supabaseData";
 import { buildStateExposureDetails } from "@/lib/thresholdImpact";
 import type { StateNexusSummary, ThresholdStatus } from "@/types";
 
@@ -63,7 +63,7 @@ const statusTone: Record<ThresholdStatus, { bar: string; icon: string; panel: st
 };
 
 export default async function StatesPage() {
-  const { invoices, rules } = await getNexusWatchData();
+  const { invoices, rules } = await getScopedNexusWatchData();
   const states = buildStateSummaries(rules, invoices);
   const exposureByState = new Map(rules.map((rule) => [rule.stateCode, buildStateExposureDetails(rule, invoices)]));
   const sortedStates = [...states].sort((a, b) => b.percentUsed - a.percentUsed);
@@ -222,11 +222,14 @@ function StateExposureTable({
           <p className="mt-1 text-xs text-slate-500">75% and 90% markers show configured exposure bands.</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <span className="secondary-button px-3 py-2 text-xs">
+          <Link href="/rules" className="secondary-button px-3 py-2 text-xs">
             <Gauge className="h-4 w-4" />
             Configure States
-          </span>
-          <span className="secondary-button px-3 py-2 text-xs">All States</span>
+          </Link>
+          <Link href="/exports?type=threshold_summary" className="secondary-button px-3 py-2 text-xs">
+            <Download className="h-4 w-4" />
+            Export threshold summary
+          </Link>
         </div>
       </div>
       <div className="overflow-x-auto">

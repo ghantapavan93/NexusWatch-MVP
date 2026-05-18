@@ -1,14 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { invoiceLineItemsToCsv, rulesToCsv, stateSummariesToCsv } from "@/lib/csv";
 import { buildStateSummaries } from "@/lib/nexus";
-import { getNexusWatchData } from "@/lib/supabaseData";
+import { getScopedNexusWatchData } from "@/lib/supabaseData";
 import { recordSupabaseExport } from "@/lib/supabaseWrites";
 import { isNormalExportEligible, isReviewQueueInvoice } from "@/lib/thresholdImpact";
 import { ExportFilterSchema } from "@/lib/validators";
 import type { ExportType, Invoice } from "@/types";
 
+export const dynamic = "force-dynamic";
+
 export async function GET() {
-  const { invoices, rules, exports, source } = await getNexusWatchData();
+  const { invoices, rules, exports, source } = await getScopedNexusWatchData();
   const states = buildStateSummaries(rules, invoices);
 
   return NextResponse.json({
@@ -27,7 +29,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ errors: parsed.error.flatten() }, { status: 400 });
   }
 
-  const { invoices, rules, source } = await getNexusWatchData();
+  const { invoices, rules, source } = await getScopedNexusWatchData();
   const filters = parsed.data;
   const periodFilteredInvoices = filterInvoicesByPeriodAndState(invoices, filters.dateFrom, filters.dateTo, filters.stateCode);
   const reviewedInvoices = periodFilteredInvoices.filter(isNormalExportEligible);

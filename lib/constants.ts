@@ -27,6 +27,8 @@ export const REVIEW_FLAGS = {
   DUPLICATE_INVOICE: "duplicate_invoice",
   LARGE_INVOICE: "large_invoice",
   CATEGORY_REVIEW: "category_review",
+  NEGATIVE_AMOUNT: "negative_amount",
+  ZERO_AMOUNT: "zero_amount",
 } as const;
 
 export const US_STATES_AND_DC = [

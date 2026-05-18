@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -9,17 +10,20 @@ import {
   Eye,
   FileImage,
   FileText,
+  Filter,
   Info,
   MoreVertical,
+  Plus,
   RotateCcw,
   ShieldCheck,
   Sparkles,
   Users,
+  X,
 } from "lucide-react";
 import { StatusBadge } from "@/components/shared/StatusBadge";
 import { Toast } from "@/components/shared/Toast";
 import { formatCurrency, formatDate, formatPercent, stateLabel } from "@/lib/format";
-import { buildInvoiceThresholdImpact, hasDetectedMismatch, hasLowConfidence } from "@/lib/thresholdImpact";
+import { buildInvoiceThresholdImpact, getInvoiceActivityDate, hasDetectedMismatch, hasLowConfidence } from "@/lib/thresholdImpact";
 import type { Invoice, NexusRule } from "@/types";
 
 type ReviewTab =
@@ -50,9 +54,65 @@ export function PremiumReviewQueueTable({
   allInvoices: Invoice[];
   rules: NexusRule[];
 }) {
+  const router = useRouter();
   const [activeTab, setActiveTab] = useState<ReviewTab>("all");
   const [toastMessage, setToastMessage] = useState("");
   const [busyInvoiceId, setBusyInvoiceId] = useState("");
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [isBulkSaving, setIsBulkSaving] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [stateFilter, setStateFilter] = useState<string>("all");
+  const [severityFilter, setSeverityFilter] = useState<"all" | "crossed" | "warning" | "watch" | "missing">("all");
+  const [sortKey, setSortKey] = useState<"newest" | "oldest" | "highest_taxable" | "highest_risk">("newest");
+  const [sortMenuOpen, setSortMenuOpen] = useState(false);
+  const [noteFormOpen, setNoteFormOpen] = useState(false);
+  const [noteDraft, setNoteDraft] = useState("");
+  const [isSavingNote, setIsSavingNote] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const tab = params.get("tab");
+    if (tab && TABS.some((entry) => entry.id === tab)) {
+      setActiveTab(tab as ReviewTab);
+    }
+    if (params.get("filters") === "open") setFiltersOpen(true);
+    if (params.get("note") === "open") setNoteFormOpen(true);
+  }, []);
+
+  useEffect(() => {
+    function onPanelEvent(event: Event) {
+      const detail = (event as CustomEvent<{ panel?: string }>).detail;
+      if (!detail) return;
+      if (detail.panel === "filters") setFiltersOpen(true);
+      if (detail.panel === "note") setNoteFormOpen(true);
+    }
+    function onTabEvent(event: Event) {
+      const detail = (event as CustomEvent<{ tab?: string }>).detail;
+      if (!detail?.tab) return;
+      if (TABS.some((tab) => tab.id === detail.tab)) {
+        setActiveTab(detail.tab as ReviewTab);
+      }
+    }
+    window.addEventListener("nexuswatch:review-panel", onPanelEvent as EventListener);
+    window.addEventListener("nexuswatch:review-tab", onTabEvent as EventListener);
+    return () => {
+      window.removeEventListener("nexuswatch:review-panel", onPanelEvent as EventListener);
+      window.removeEventListener("nexuswatch:review-tab", onTabEvent as EventListener);
+    };
+  }, []);
+
+  const stateOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          invoices
+            .map((invoice) => invoice.shipToState)
+            .filter((value): value is string => Boolean(value))
+        )
+      ).sort(),
+    [invoices]
+  );
 
   const enriched = useMemo(
     () =>
@@ -77,18 +137,60 @@ export function PremiumReviewQueueTable({
   );
 
   const filteredItems = useMemo(() => {
-    return enriched.filter(({ invoice, impact }) => {
-      if (activeTab === "all") return true;
-      if (activeTab === "needs_review") return invoice.reviewStatus === "needs_review";
-      if (activeTab === "accounting_review") return invoice.reviewStatus === "accounting_review";
-      if (activeTab === "ocr_needs_review") return invoice.extractionStatus === "ocr_needs_review" || hasLowConfidence(invoice);
-      if (activeTab === "missing_fields") {
-        return invoice.flags.includes("missing_ship_to") || invoice.flags.includes("missing_category") || !invoice.shipToState;
-      }
-      if (activeTab === "threshold_warnings") return impact.watch75 || impact.warning90 || impact.thresholdCrossingRisk;
-      return invoice.reviewStatus === "approved";
-    });
-  }, [activeTab, enriched]);
+    return enriched
+      .filter(({ invoice, impact }) => {
+        if (activeTab === "needs_review" && invoice.reviewStatus !== "needs_review") return false;
+        if (activeTab === "accounting_review" && invoice.reviewStatus !== "accounting_review") return false;
+        if (activeTab === "ocr_needs_review" && invoice.extractionStatus !== "ocr_needs_review" && !hasLowConfidence(invoice)) return false;
+        if (activeTab === "missing_fields") {
+          if (
+            !invoice.flags.includes("missing_ship_to") &&
+            !invoice.flags.includes("missing_category") &&
+            invoice.shipToState
+          ) {
+            return false;
+          }
+        }
+        if (activeTab === "threshold_warnings" && !impact.watch75 && !impact.warning90 && !impact.thresholdCrossingRisk) return false;
+        if (activeTab === "approved" && invoice.reviewStatus !== "approved") return false;
+
+        if (stateFilter !== "all" && invoice.shipToState !== stateFilter) return false;
+        if (severityFilter === "crossed" && !impact.thresholdCrossingRisk) return false;
+        if (severityFilter === "warning" && !impact.warning90 && !impact.thresholdCrossingRisk) return false;
+        if (severityFilter === "watch" && !impact.watch75 && !impact.warning90 && !impact.thresholdCrossingRisk) return false;
+        if (
+          severityFilter === "missing" &&
+          !invoice.flags.includes("missing_ship_to") &&
+          !invoice.flags.includes("missing_category") &&
+          invoice.shipToState
+        ) {
+          return false;
+        }
+
+        return true;
+      })
+      .sort((a, b) => {
+        if (sortKey === "oldest") return getInvoiceActivityDate(a.invoice).localeCompare(getInvoiceActivityDate(b.invoice));
+        if (sortKey === "highest_taxable") return b.invoice.taxableAmount - a.invoice.taxableAmount;
+        if (sortKey === "highest_risk") {
+          const ra = a.impact.thresholdCrossingRisk ? 3 : a.impact.warning90 ? 2 : a.impact.watch75 ? 1 : 0;
+          const rb = b.impact.thresholdCrossingRisk ? 3 : b.impact.warning90 ? 2 : b.impact.watch75 ? 1 : 0;
+          if (rb !== ra) return rb - ra;
+          return b.impact.percentAfterInvoice - a.impact.percentAfterInvoice;
+        }
+        return getInvoiceActivityDate(b.invoice).localeCompare(getInvoiceActivityDate(a.invoice));
+      });
+  }, [activeTab, enriched, severityFilter, sortKey, stateFilter]);
+
+  const sortLabel: Record<typeof sortKey, string> = {
+    newest: "Newest",
+    oldest: "Oldest",
+    highest_taxable: "Highest taxable",
+    highest_risk: "Highest risk",
+  };
+
+  const filterChipsActive =
+    stateFilter !== "all" || severityFilter !== "all" ? 1 + (stateFilter !== "all" ? 1 : 0) + (severityFilter !== "all" ? 1 : 0) - 1 : 0;
 
   async function updateAccountingStatus(invoice: Invoice, action: "complete" | "return") {
     const impact = buildInvoiceThresholdImpact(invoice, allInvoices, rules);
@@ -122,10 +224,95 @@ export function PremiumReviewQueueTable({
         return;
       }
       setToastMessage(action === "complete" ? "Accounting review completed." : "Invoice returned to review queue.");
+      router.refresh();
     } catch {
       setToastMessage("Review status could not be saved. Check the local server and Supabase connection.");
     } finally {
       setBusyInvoiceId("");
+    }
+  }
+
+  function toggleSelected(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function getSelectedInvoices() {
+    return filteredItems.map(({ invoice }) => invoice).filter((invoice) => selectedIds.has(invoice.id));
+  }
+
+  async function submitReviewNote() {
+    const trimmed = noteDraft.trim();
+    if (!trimmed) {
+      setToastMessage("Type a review note before saving.");
+      return;
+    }
+    const targets = getSelectedInvoices();
+    const target = targets[0];
+    if (!target) {
+      setToastMessage("Select an invoice in the queue to attach the review note.");
+      return;
+    }
+    setIsSavingNote(true);
+    try {
+      const response = await fetch(`/api/invoices/${target.id}/note`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note: trimmed, auditSource: "review_queue" }),
+      });
+      const result = (await response.json()) as { message?: string };
+      if (!response.ok) {
+        setToastMessage(result.message ?? "Review note could not be saved.");
+        return;
+      }
+      setToastMessage(`Review note added to ${target.invoiceNumber}.`);
+      setNoteDraft("");
+      setNoteFormOpen(false);
+      router.refresh();
+    } catch {
+      setToastMessage("Review note could not be saved. Check the local server and Supabase connection.");
+    } finally {
+      setIsSavingNote(false);
+    }
+  }
+
+  async function bulkSendToAccountingReview() {
+    const candidates = getSelectedInvoices().filter(
+      (invoice) => invoice.reviewStatus !== "accounting_review" && invoice.reviewStatus !== "approved" && invoice.reviewStatus !== "exported"
+    );
+    if (!candidates.length) {
+      setToastMessage("Select one or more needs-review items to send to accounting review.");
+      return;
+    }
+    setIsBulkSaving(true);
+    try {
+      let ok = 0;
+      for (const invoice of candidates) {
+        const impact = buildInvoiceThresholdImpact(invoice, allInvoices, rules);
+        const response = await fetch(`/api/invoices/${invoice.id}/status`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            status: "open",
+            reviewStatus: "accounting_review",
+            auditAction: "sent_to_accounting_review",
+            auditSource: "review_queue_bulk",
+            riskReasons: impact.riskReasons,
+          }),
+        });
+        if (response.ok) ok += 1;
+      }
+      setToastMessage(`${ok} of ${candidates.length} invoice${candidates.length === 1 ? "" : "s"} sent to accounting review.`);
+      setSelectedIds(new Set());
+      router.refresh();
+    } catch {
+      setToastMessage("Some statuses could not be saved. Check the local server and Supabase connection.");
+    } finally {
+      setIsBulkSaving(false);
     }
   }
 
@@ -158,21 +345,176 @@ export function PremiumReviewQueueTable({
               })}
             </div>
 
-            <div className="flex flex-col gap-3 border-b border-slate-200 bg-white px-5 py-4 md:flex-row md:items-center md:justify-between">
+            <div
+              id="review-queue-toolbar"
+              className="flex flex-col gap-3 border-b border-slate-200 bg-white px-5 py-4 md:flex-row md:items-center md:justify-between"
+            >
               <div>
                 <h2 className="text-sm font-black text-slate-950">{filteredItems.length} items</h2>
-                <p className="mt-1 text-xs text-slate-500">Decision support queue for human, OCR, threshold, and accounting review.</p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Decision support queue for human, OCR, threshold, and accounting review. Sorted by {sortLabel[sortKey].toLowerCase()}.
+                </p>
               </div>
               <div className="flex flex-wrap items-center gap-2">
-                <button className="secondary-button px-3 py-2 text-sm" type="button">
-                  Sort: Newest
-                  <ChevronDown className="h-4 w-4" />
+                <button
+                  type="button"
+                  onClick={() => setFiltersOpen((open) => !open)}
+                  className={`secondary-button px-3 py-2 text-sm ${filtersOpen ? "ring-2 ring-indigo-200" : ""}`}
+                  aria-expanded={filtersOpen}
+                >
+                  <Filter className="h-4 w-4" />
+                  Manage Filters
+                  {filterChipsActive ? (
+                    <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-bold text-indigo-700">
+                      {(stateFilter !== "all" ? 1 : 0) + (severityFilter !== "all" ? 1 : 0)}
+                    </span>
+                  ) : null}
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setNoteFormOpen((open) => !open)}
+                  className="primary-button px-3 py-2 text-sm"
+                >
+                  <Plus className="h-4 w-4" />
+                  Add Review Note
+                </button>
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setSortMenuOpen((open) => !open)}
+                    className="secondary-button px-3 py-2 text-sm"
+                    aria-haspopup="menu"
+                    aria-expanded={sortMenuOpen}
+                  >
+                    Sort: {sortLabel[sortKey]}
+                    <ChevronDown className="h-4 w-4" />
+                  </button>
+                  {sortMenuOpen ? (
+                    <div className="absolute right-0 z-20 mt-1 w-48 rounded-xl border border-slate-200 bg-white p-1 shadow-lg">
+                      {(Object.keys(sortLabel) as Array<keyof typeof sortLabel>).map((key) => (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => {
+                            setSortKey(key);
+                            setSortMenuOpen(false);
+                          }}
+                          className={`flex w-full items-center justify-between rounded-lg px-3 py-2 text-left text-sm ${
+                            sortKey === key ? "bg-indigo-50 text-indigo-700" : "text-slate-700 hover:bg-slate-50"
+                          }`}
+                        >
+                          {sortLabel[key]}
+                          {sortKey === key ? <CheckCircle2 className="h-4 w-4" /> : null}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
                 <Link href="/exports" className="secondary-button px-3 py-2 text-sm">
                   Export review queue
                 </Link>
               </div>
             </div>
+
+            {filtersOpen ? (
+              <div className="border-b border-slate-200 bg-slate-50/70 px-5 py-4">
+                <div className="grid gap-3 md:grid-cols-3">
+                  <label className="text-xs font-semibold uppercase text-slate-500">
+                    Ship-to state
+                    <select
+                      value={stateFilter}
+                      onChange={(event) => setStateFilter(event.target.value)}
+                      className="mt-1 block h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-800"
+                    >
+                      <option value="all">All states</option>
+                      {stateOptions.map((state) => (
+                        <option key={state} value={state}>
+                          {state}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="text-xs font-semibold uppercase text-slate-500">
+                    Severity
+                    <select
+                      value={severityFilter}
+                      onChange={(event) => setSeverityFilter(event.target.value as typeof severityFilter)}
+                      className="mt-1 block h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-800"
+                    >
+                      <option value="all">All severities</option>
+                      <option value="crossed">Crossed configured threshold</option>
+                      <option value="warning">90% warning band or above</option>
+                      <option value="watch">75% watch band or above</option>
+                      <option value="missing">Missing required fields</option>
+                    </select>
+                  </label>
+                  <div className="flex items-end justify-end">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setStateFilter("all");
+                        setSeverityFilter("all");
+                      }}
+                      className="secondary-button px-3 py-2 text-sm"
+                    >
+                      <X className="h-4 w-4" />
+                      Clear filters
+                    </button>
+                  </div>
+                </div>
+                <p className="mt-3 text-xs text-slate-500">
+                  Filters combine with the tab selection. {filteredItems.length} items match the current view.
+                </p>
+              </div>
+            ) : null}
+
+            {noteFormOpen ? (
+              <div className="border-b border-slate-200 bg-amber-50/70 px-5 py-4">
+                <div className="flex flex-col gap-3 md:flex-row md:items-start">
+                  <div className="flex-1">
+                    <div className="flex items-center justify-between gap-3">
+                      <h3 className="text-sm font-bold text-slate-950">Add Review Note</h3>
+                      <button type="button" onClick={() => setNoteFormOpen(false)} aria-label="Close" className="text-slate-500 hover:text-slate-900">
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                    <p className="mt-1 text-xs text-slate-600">
+                      Select an invoice in the queue first. The note is appended to the invoice&apos;s review notes and written to audit logs.
+                      {(() => {
+                        const target = getSelectedInvoices()[0];
+                        return target ? ` Target: ${target.invoiceNumber} (${target.customerName}).` : " No invoice selected yet.";
+                      })()}
+                    </p>
+                    <textarea
+                      value={noteDraft}
+                      onChange={(event) => setNoteDraft(event.target.value)}
+                      placeholder="e.g. Confirmed ship-to with customer; mismatch resolved."
+                      className="mt-2 min-h-24 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none ring-blue-100 focus:ring-4"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2 md:w-44">
+                    <button
+                      type="button"
+                      disabled={isSavingNote || getSelectedInvoices().length === 0}
+                      onClick={() => void submitReviewNote()}
+                      className="primary-button justify-center px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {isSavingNote ? "Saving..." : "Save Note"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNoteDraft("");
+                        setNoteFormOpen(false);
+                      }}
+                      className="secondary-button justify-center px-3 py-2 text-sm"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : null}
 
             <div className="overflow-x-auto">
               <table className="min-w-[1180px] divide-y divide-slate-200 text-sm">
@@ -195,7 +537,13 @@ export function PremiumReviewQueueTable({
                   {filteredItems.map(({ invoice, impact }) => (
                     <tr key={invoice.id} className="transition hover:bg-indigo-50/25">
                       <td className="px-4 py-5 align-top">
-                        <input className="mt-2 h-4 w-4 rounded border-slate-300" type="checkbox" aria-label={`Select ${invoice.invoiceNumber}`} />
+                        <input
+                          className="mt-2 h-4 w-4 rounded border-slate-300"
+                          type="checkbox"
+                          aria-label={`Select ${invoice.invoiceNumber}`}
+                          checked={selectedIds.has(invoice.id)}
+                          onChange={() => toggleSelected(invoice.id)}
+                        />
                       </td>
                       <td className="px-4 py-5 align-top">
                         <div className="flex gap-3">
@@ -226,13 +574,28 @@ export function PremiumReviewQueueTable({
                         <ThresholdBar percent={impact.percentAfterInvoice} amount={impact.projectedExposureAfterInvoice} threshold={impact.thresholdAmount} />
                       </td>
                       <td className="px-4 py-5 align-top">
-                        {invoice.pdfFileName || invoice.pdfPublicUrl ? (
-                          <div>
+                        {invoice.pdfPublicUrl ? (
+                          <a
+                            href={invoice.pdfPublicUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="block max-w-[160px]"
+                            title={invoice.pdfFileName ?? "Open source PDF"}
+                          >
+                            <span className="inline-flex rounded-md bg-red-50 px-2 py-1 text-xs font-black text-red-700 ring-1 ring-red-200 hover:bg-red-100">
+                              PDF
+                            </span>
+                            <div className="mt-1 truncate text-xs font-semibold text-blue-700">
+                              {invoice.pdfFileName ?? "Open source PDF"}
+                            </div>
+                          </a>
+                        ) : invoice.pdfFileName ? (
+                          <Link href={`/invoices/${invoice.id}`} className="block max-w-[160px]">
                             <span className="inline-flex rounded-md bg-red-50 px-2 py-1 text-xs font-black text-red-700 ring-1 ring-red-200">
                               PDF
                             </span>
-                            <div className="mt-1 max-w-[120px] truncate text-xs text-slate-500">{invoice.pdfFileName ?? "Source PDF"}</div>
-                          </div>
+                            <div className="mt-1 truncate text-xs text-slate-500">{invoice.pdfFileName}</div>
+                          </Link>
                         ) : (
                           <span className="text-xs text-slate-400">No source</span>
                         )}
@@ -246,7 +609,7 @@ export function PremiumReviewQueueTable({
                       <td className="px-4 py-5 align-top">
                         <div className="space-y-1">
                           <StatusBadge status={invoice.reviewStatus} />
-                          <div className="text-xs text-slate-500">May {new Date(invoice.invoiceDate).getDate()}, 2026</div>
+                          <div className="text-xs text-slate-500">{formatDate(getInvoiceActivityDate(invoice))}</div>
                         </div>
                       </td>
                       <td className="px-4 py-5 align-top">
@@ -275,41 +638,53 @@ export function PremiumReviewQueueTable({
             ) : null}
 
             <div className="flex flex-wrap items-center gap-3 border-t border-slate-200 bg-white px-5 py-4">
-              <span className="mr-auto text-sm font-bold text-slate-600">0 selected</span>
-              <Link href={filteredItems[0] ? `/invoices/${filteredItems[0].invoice.id}` : "/invoices"} className="secondary-button px-3 py-2 text-sm">
-                Open Invoice
-              </Link>
-              <button className="secondary-button px-3 py-2 text-sm" type="button">
-                <Users className="h-4 w-4" />
-                Send to Accounting Review
-              </button>
-              {filteredItems.find(({ invoice }) => invoice.reviewStatus === "accounting_review") ? (
-                <>
-                  <button
-                    className="secondary-button px-3 py-2 text-sm"
-                    type="button"
-                    disabled={busyInvoiceId === filteredItems.find(({ invoice }) => invoice.reviewStatus === "accounting_review")?.invoice.id}
-                    onClick={() => {
-                      const item = filteredItems.find(({ invoice }) => invoice.reviewStatus === "accounting_review");
-                      if (item) void updateAccountingStatus(item.invoice, "complete");
-                    }}
-                  >
-                    <CheckCircle2 className="h-4 w-4" />
-                    Mark Accounting Review Complete
-                  </button>
-                  <button
-                    className="secondary-button px-3 py-2 text-sm"
-                    type="button"
-                    onClick={() => {
-                      const item = filteredItems.find(({ invoice }) => invoice.reviewStatus === "accounting_review");
-                      if (item) void updateAccountingStatus(item.invoice, "return");
-                    }}
-                  >
-                    <RotateCcw className="h-4 w-4" />
-                    Return to Review Queue
-                  </button>
-                </>
-              ) : null}
+              <span className="mr-auto text-sm font-bold text-slate-600">{selectedIds.size} selected</span>
+              {(() => {
+                const selectedInvoices = getSelectedInvoices();
+                const firstSelected = selectedInvoices[0];
+                const selectedAccountingReview = selectedInvoices.find((invoice) => invoice.reviewStatus === "accounting_review");
+                return (
+                  <>
+                    <Link
+                      href={firstSelected ? `/invoices/${firstSelected.id}` : filteredItems[0] ? `/invoices/${filteredItems[0].invoice.id}` : "/invoices"}
+                      className="secondary-button px-3 py-2 text-sm"
+                    >
+                      Open Invoice
+                    </Link>
+                    <button
+                      className="secondary-button px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
+                      type="button"
+                      disabled={isBulkSaving || selectedInvoices.length === 0}
+                      onClick={() => void bulkSendToAccountingReview()}
+                    >
+                      <Users className="h-4 w-4" />
+                      Send to Accounting Review
+                    </button>
+                    {selectedAccountingReview ? (
+                      <>
+                        <button
+                          className="secondary-button px-3 py-2 text-sm"
+                          type="button"
+                          disabled={busyInvoiceId === selectedAccountingReview.id}
+                          onClick={() => void updateAccountingStatus(selectedAccountingReview, "complete")}
+                        >
+                          <CheckCircle2 className="h-4 w-4" />
+                          Mark Accounting Review Complete
+                        </button>
+                        <button
+                          className="secondary-button px-3 py-2 text-sm"
+                          type="button"
+                          disabled={busyInvoiceId === selectedAccountingReview.id}
+                          onClick={() => void updateAccountingStatus(selectedAccountingReview, "return")}
+                        >
+                          <RotateCcw className="h-4 w-4" />
+                          Return to Review Queue
+                        </button>
+                      </>
+                    ) : null}
+                  </>
+                );
+              })()}
             </div>
           </div>
         </section>
@@ -396,13 +771,24 @@ function ThresholdBar({ percent, amount, threshold }: { percent: number; amount:
 }
 
 function OcrBadge({ invoice }: { invoice: Invoice }) {
-  if (invoice.extractionStatus === "ocr_needs_review") {
+  const rawConfidence =
+    invoice.sourceDocument?.ocrConfidence ??
+    (typeof invoice.extractionConfidence === "number" ? invoice.extractionConfidence : null);
+  const confidencePercent =
+    rawConfidence == null || !Number.isFinite(rawConfidence)
+      ? null
+      : Math.round(rawConfidence <= 1 ? rawConfidence * 100 : rawConfidence);
+  const confidenceLabel = confidencePercent == null ? null : `${confidencePercent}%`;
+
+  if (invoice.extractionStatus === "ocr_needs_review" || hasLowConfidence(invoice)) {
     return (
       <div className="space-y-1">
         <span className="inline-flex rounded-md bg-amber-50 px-2 py-1 text-xs font-bold text-amber-700 ring-1 ring-amber-200">
-          Medium Confidence
+          Review OCR
         </span>
-        <div className="w-fit rounded-md bg-slate-100 px-2 py-0.5 text-xs text-slate-600">72%</div>
+        {confidenceLabel ? (
+          <div className="w-fit rounded-md bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{confidenceLabel}</div>
+        ) : null}
       </div>
     );
   }
@@ -410,9 +796,11 @@ function OcrBadge({ invoice }: { invoice: Invoice }) {
     return (
       <div className="space-y-1">
         <span className="inline-flex rounded-md bg-emerald-50 px-2 py-1 text-xs font-bold text-emerald-700 ring-1 ring-emerald-200">
-          High Confidence
+          Extracted
         </span>
-        <div className="w-fit rounded-md bg-slate-100 px-2 py-0.5 text-xs text-slate-600">95%</div>
+        {confidenceLabel ? (
+          <div className="w-fit rounded-md bg-slate-100 px-2 py-0.5 text-xs text-slate-600">{confidenceLabel}</div>
+        ) : null}
       </div>
     );
   }

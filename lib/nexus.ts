@@ -15,12 +15,14 @@ export function calculateTaxableAmount(rule: NexusRule, items: Pick<LineItem, "c
   );
 }
 
-export function getThresholdStatus(total: number, threshold: number) {
+export function getThresholdStatus(total: number, threshold: number, bands?: { watch?: number; warning?: number }) {
   const percent = threshold > 0 ? (total / threshold) * 100 : 0;
+  const warning = bands?.warning ?? 90;
+  const watch = bands?.watch ?? 75;
 
   if (percent >= 100) return { status: "crossed" as const, percent, label: "Crossed Threshold" };
-  if (percent >= 90) return { status: "warning" as const, percent, label: "90% Warning" };
-  if (percent >= 75) return { status: "watch" as const, percent, label: "75% Watch" };
+  if (percent >= warning) return { status: "warning" as const, percent, label: `${warning}% Warning` };
+  if (percent >= watch) return { status: "watch" as const, percent, label: `${watch}% Watch` };
   return { status: "safe" as const, percent, label: "Safe" };
 }
 

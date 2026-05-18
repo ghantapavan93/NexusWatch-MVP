@@ -82,8 +82,40 @@ export function PremiumInvoiceTable({ invoices, rules }: { invoices: Invoice[]; 
     const params = new URLSearchParams(window.location.search);
     const filter = params.get("filter");
     const source = params.get("source");
-    if (filter && SEGMENTS.some((segment) => segment.id === filter)) setActiveSegment(filter as Segment);
-    if (source === "document") setActiveSegment("source_document");
+    const queryParam = params.get("q");
+    if (queryParam) setSearch(queryParam);
+    if (filter && SEGMENTS.some((segment) => segment.id === filter)) {
+      setActiveSegment(filter as Segment);
+      return;
+    }
+    if (source === "document") {
+      setActiveSegment("source_document");
+      return;
+    }
+    try {
+      const raw = window.localStorage.getItem("nexuswatch_invoices_saved_view");
+      if (!raw) return;
+      const saved = JSON.parse(raw) as Partial<{
+        segment: Segment;
+        search: string;
+        stateFilter: string;
+        sourceFilter: string;
+        reviewStatusFilter: string;
+        sortKey: SortKey;
+      }>;
+      if (saved.segment && SEGMENTS.some((segment) => segment.id === saved.segment)) {
+        setActiveSegment(saved.segment);
+      }
+      if (typeof saved.search === "string") setSearch(saved.search);
+      if (typeof saved.stateFilter === "string") setStateFilter(saved.stateFilter);
+      if (typeof saved.sourceFilter === "string") setSourceFilter(saved.sourceFilter);
+      if (typeof saved.reviewStatusFilter === "string") setReviewStatusFilter(saved.reviewStatusFilter);
+      if (saved.sortKey === "invoice_date" || saved.sortKey === "amount" || saved.sortKey === "risk" || saved.sortKey === "updated_date") {
+        setSortKey(saved.sortKey);
+      }
+    } catch {
+      // Ignore unreadable saved view; fall back to defaults.
+    }
   }, []);
 
   const enriched = useMemo(
@@ -170,11 +202,31 @@ export function PremiumInvoiceTable({ invoices, rules }: { invoices: Invoice[]; 
     setSortKey("updated_date");
     setActiveSegment("all");
     setSavedViewMessage("");
+    try {
+      window.localStorage.removeItem("nexuswatch_invoices_saved_view");
+    } catch {
+      // Ignore storage unavailability.
+    }
   }
 
   function saveView() {
     const label = SEGMENTS.find((segment) => segment.id === activeSegment)?.label ?? "Current view";
-    setSavedViewMessage(`${label} saved locally for this session.`);
+    try {
+      window.localStorage.setItem(
+        "nexuswatch_invoices_saved_view",
+        JSON.stringify({
+          segment: activeSegment,
+          search,
+          stateFilter,
+          sourceFilter,
+          reviewStatusFilter,
+          sortKey,
+        })
+      );
+      setSavedViewMessage(`${label} saved. Filters will restore next time you open Invoices.`);
+    } catch {
+      setSavedViewMessage(`${label} could not be saved (local storage unavailable).`);
+    }
   }
 
   function syncHorizontalScroll(source: "top" | "table") {
@@ -382,10 +434,31 @@ function InvoiceRow({ invoice, invoices, rules }: { invoice: Invoice; invoices: 
         {invoice.extractionStatus ? <StatusBadge status={invoice.extractionStatus} /> : <span className="text-xs text-slate-500">No extraction status</span>}
       </td>
       <td className="px-4 py-4">
-        <span className="inline-flex items-center gap-2 text-slate-700">
-          <SourceIcon className="h-4 w-4 text-indigo-500" />
-          {sourceLinked ? getSourceLabel(invoice) : "No source document linked"}
-        </span>
+        {invoice.pdfPublicUrl ? (
+          <a
+            href={invoice.pdfPublicUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-2 font-semibold text-indigo-700 hover:text-indigo-900"
+            title={invoice.pdfFileName ?? "Open source PDF"}
+          >
+            <SourceIcon className="h-4 w-4" />
+            {getSourceLabel(invoice)}
+          </a>
+        ) : sourceLinked ? (
+          <Link
+            href={`/invoices/${invoice.id}`}
+            className="inline-flex items-center gap-2 font-semibold text-indigo-700 hover:text-indigo-900"
+          >
+            <SourceIcon className="h-4 w-4" />
+            {getSourceLabel(invoice)}
+          </Link>
+        ) : (
+          <span className="inline-flex items-center gap-2 text-slate-500">
+            <SourceIcon className="h-4 w-4 text-slate-400" />
+            No source document linked
+          </span>
+        )}
       </td>
       <td className="px-4 py-4">
         <div className="flex flex-wrap gap-1.5">

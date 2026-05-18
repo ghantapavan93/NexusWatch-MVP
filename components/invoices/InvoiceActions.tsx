@@ -2,10 +2,20 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { CheckCircle2, Download, Send } from "lucide-react";
 import { Toast } from "@/components/shared/Toast";
 
-export function InvoiceActions({ invoiceId, shipToState }: { invoiceId: string; shipToState?: string | null }) {
+export function InvoiceActions({
+  invoiceId,
+  invoiceNumber,
+  shipToState,
+}: {
+  invoiceId: string;
+  invoiceNumber: string;
+  shipToState?: string | null;
+}) {
+  const router = useRouter();
   const [message, setMessage] = useState("Status and export actions save to Supabase.");
   const [toastMessage, setToastMessage] = useState("");
   const [isSaving, setIsSaving] = useState(false);
@@ -30,9 +40,10 @@ export function InvoiceActions({ invoiceId, shipToState }: { invoiceId: string; 
       if (response.ok) {
         setToastMessage(
           reviewStatus === "approved"
-            ? "Invoice approved for NexusWatch reporting."
+            ? "Invoice approved for reviewed export."
             : "Invoice moved to accounting review."
         );
+        router.refresh();
       }
     } catch {
       setMessage("Status could not be saved. Check the local server and Supabase connection.");
@@ -43,24 +54,25 @@ export function InvoiceActions({ invoiceId, shipToState }: { invoiceId: string; 
 
   async function exportInvoice() {
     setIsSaving(true);
-    setMessage("Recording export...");
+    setMessage("Recording single-invoice export...");
 
     try {
       const response = await fetch("/api/exports", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          exportType: "state_transactions",
+          exportType: "single_invoice",
+          invoiceNumber,
           stateCode: shipToState || undefined,
         }),
       });
-      const result = (await response.json()) as { message?: string; exportHistorySaved?: boolean };
+      const result = (await response.json()) as { message?: string; exportHistorySaved?: boolean; fileName?: string };
       setMessage(
         result.exportHistorySaved
-          ? "Export history saved to Supabase."
+          ? `Single-invoice export saved to Supabase (${result.fileName ?? "CSV"}).`
           : result.message ?? "Export generated, but history was not saved."
       );
-      if (result.exportHistorySaved) setToastMessage("Export history saved to Supabase.");
+      if (result.exportHistorySaved) setToastMessage("Single-invoice export saved to history.");
     } catch {
       setMessage("Export history could not be saved. Check the local server and Supabase connection.");
     } finally {
@@ -92,13 +104,19 @@ export function InvoiceActions({ invoiceId, shipToState }: { invoiceId: string; 
             <Send className="h-4 w-4" />
             Send to Accounting Review
           </button>
-          <Link
-            href="/exports"
-            onClick={exportInvoice}
-            className="primary-button px-3 py-2 text-sm"
+          <button
+            type="button"
+            disabled={isSaving}
+            onClick={() => void exportInvoice()}
+            className="primary-button px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60"
           >
             <Download className="h-4 w-4" />
             Export Invoice
+          </button>
+        </div>
+        <div className="mt-3">
+          <Link href={`/exports?invoice=${encodeURIComponent(invoiceNumber)}`} className="text-xs font-semibold text-blue-700 hover:text-blue-900">
+            Open in Exports for CSV download &rarr;
           </Link>
         </div>
         <p className="mt-4 rounded-md bg-slate-50 p-3 text-xs leading-5 text-slate-500">{message}</p>
