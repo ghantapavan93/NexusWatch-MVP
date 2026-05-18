@@ -1,3 +1,4 @@
+import { getAppSettings } from "@/lib/appSettings";
 import { demoCompany } from "@/lib/demoData";
 import { roundCurrency } from "@/lib/format";
 import { buildStateSummaries, isLineTaxable, previewInvoiceImpact } from "@/lib/nexus";
@@ -71,6 +72,7 @@ export async function createSupabaseInvoice(input: WritableInvoiceInput) {
   }
 
   const { invoices, rules } = await getNexusWatchData();
+  const appSettings = await getAppSettings();
   const companyId = process.env.NEXT_PUBLIC_DEMO_COMPANY_ID ?? demoCompany.id;
   const shipToState = normalizeState(input.shipToState);
   const billToState = normalizeState(input.billToState);
@@ -86,10 +88,16 @@ export async function createSupabaseInvoice(input: WritableInvoiceInput) {
     rule,
     invoices,
     rules,
+    largeInvoiceThreshold: appSettings.largeInvoiceThreshold,
+    watchBandPercent: appSettings.watchBandPercent,
+    warningBandPercent: appSettings.warningBandPercent,
   });
   const reviewStatus = getReviewStatus(input.reviewStatus ?? input.requestedStatus, flags);
   const status = input.status ?? getOperationalStatus(reviewStatus);
-  const riskStatus = getRiskStatus(rule, shipToState, totals.taxableAmount, reviewStatus, invoices, rules);
+  const riskStatus = getRiskStatus(rule, shipToState, totals.taxableAmount, reviewStatus, invoices, rules, {
+    watchBandPercent: appSettings.watchBandPercent,
+    warningBandPercent: appSettings.warningBandPercent,
+  });
 
   const invoicePayload = {
     company_id: companyId,
@@ -668,6 +676,9 @@ function buildWritableFlags({
   rule,
   invoices,
   rules,
+  largeInvoiceThreshold,
+  watchBandPercent,
+  warningBandPercent,
 }: {
   invoiceNumber: string;
   lineItems: WritableLineItem[];
@@ -678,6 +689,9 @@ function buildWritableFlags({
   rule?: NexusRule;
   invoices: Awaited<ReturnType<typeof getNexusWatchData>>["invoices"];
   rules: NexusRule[];
+  largeInvoiceThreshold: number;
+  watchBandPercent: number;
+  warningBandPercent: number;
 }) {
   const flags = new Set<ReviewFlag>();
   if (!shipToState) flags.add("missing_ship_to");
@@ -686,7 +700,7 @@ function buildWritableFlags({
     flags.add("category_review");
   }
   if (shipToState && billToState && shipToState !== billToState) flags.add("ship_bill_mismatch");
-  if (Math.abs(totalAmount) >= 50000) flags.add("large_invoice");
+  if (Math.abs(totalAmount) >= largeInvoiceThreshold) flags.add("large_invoice");
   if (invoices.some((invoice) => invoice.invoiceNumber.toLowerCase() === invoiceNumber.toLowerCase())) {
     flags.add("duplicate_invoice");
   }
@@ -696,6 +710,8 @@ function buildWritableFlags({
   if (totalAmount === 0 || lineItems.some((item) => item.amount === 0)) {
     flags.add("zero_amount");
   }
+  void watchBandPercent;
+  void warningBandPercent;
 
   if (rule && shipToState) {
     const stateSummary = buildStateSummaries(rules, invoices).find((item) => item.stateCode === shipToState);
@@ -730,11 +746,19 @@ function getRiskStatus(
   taxableAmount: number,
   reviewStatus: InvoiceStatus,
   invoices: Awaited<ReturnType<typeof getNexusWatchData>>["invoices"],
-  rules: NexusRule[]
+  rules: NexusRule[],
+  bands?: { watchBandPercent?: number; warningBandPercent?: number }
 ) {
   if (!rule || !shipToState) return reviewStatus === "needs_review" ? "needs_review" : "safe";
   const stateSummary = buildStateSummaries(rules, invoices).find((item) => item.stateCode === shipToState);
-  return previewInvoiceImpact(stateSummary?.taxableTotal ?? 0, taxableAmount, rule.thresholdAmount).after.status;
+  const impact = previewInvoiceImpact(stateSummary?.taxableTotal ?? 0, taxableAmount, rule.thresholdAmount);
+  const percent = impact.after.percent;
+  const warning = bands?.warningBandPercent ?? 90;
+  const watch = bands?.watchBandPercent ?? 75;
+  if (percent >= 100) return "crossed";
+  if (percent >= warning) return "warning";
+  if (percent >= watch) return "watch";
+  return "safe";
 }
 
 function normalizeState(value?: string | null) {

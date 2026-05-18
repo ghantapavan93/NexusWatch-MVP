@@ -16,29 +16,32 @@ import {
   Zap,
 } from "lucide-react";
 import { PageHeader } from "@/components/layout/PageHeader";
+import { SettingsEditor } from "@/components/settings/SettingsEditor";
+import { getAppSettings } from "@/lib/appSettings";
 import { CALCULATION_RULES } from "@/lib/constants";
 import { demoCompany } from "@/lib/demoData";
 import { getSupabaseStatus } from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 
-export default function SettingsPage() {
+export default async function SettingsPage() {
   const supabase = getSupabaseStatus();
+  const settings = await getAppSettings();
   const sections = [
     { id: "overview", label: "Overview", icon: Grid2X2 },
+    { id: "threshold-bands", label: "Threshold Bands", icon: Zap },
+    { id: "review-workflow", label: "Review Workflow", icon: Workflow },
+    { id: "exports", label: "Reviewed Export Gates", icon: Download },
     { id: "measurement", label: "Measurement", icon: CalendarDays },
-    { id: "threshold-rules", label: "Threshold Rules", icon: Zap },
-    { id: "review-workflow", label: "Review & Workflow", icon: Workflow },
-    { id: "exports", label: "Exports", icon: Download },
+    { id: "locked-rules", label: "Locked Rules", icon: Lock },
     { id: "integrations", label: "Data & Integrations", icon: Database },
-    { id: "general", label: "General", icon: Settings2 },
   ];
 
   return (
     <>
       <PageHeader
         title="Settings"
-        description="Read-only summary of the active configuration. Editable items link to the page where they live."
+        description="Live runtime settings backed by Supabase. Edits update flag logic, dashboard counts, and export gates immediately."
         action={
           <div className="flex flex-wrap items-center gap-2">
             <a
@@ -93,8 +96,8 @@ export default function SettingsPage() {
         <SettingMetric
           icon={CalendarDays}
           label="Measurement Period"
-          value="Calendar Year"
-          detail="Jan 1 - Dec 31"
+          value={settings.measurementPeriod === "fiscal_year" ? "Fiscal year" : "Calendar year"}
+          detail={settings.measurementPeriod === "fiscal_year" ? `Starts month ${settings.fiscalYearStartMonth}` : "Jan 1 - Dec 31"}
           tone="blue"
         />
         <SettingMetric
@@ -108,88 +111,8 @@ export default function SettingsPage() {
       </section>
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
-        <div className="space-y-5">
-          <section className="grid gap-5 lg:grid-cols-2">
-            <SettingsPanel
-              id="threshold-rules"
-              icon={ShieldCheck}
-              title="Threshold Rules"
-              description="Risk bands used by Dashboard and States. Configured threshold per state is editable on the Rules page."
-              rows={[
-                ["75% watch band", "Yes", "good"],
-                ["90% warning band", "Yes", "good"],
-                ["Above configured threshold", "Crossed", "alert"],
-                ["Configured rounding", CALCULATION_RULES.ROUND_TO_CENTS ? "Cents" : "Raw", ""],
-              ]}
-              footer={{ label: "Open Rules", href: "/rules" }}
-            />
-            <SettingsPanel
-              id="review-workflow"
-              icon={Workflow}
-              title="Review Workflow"
-              description="How invoices flow through review and accounting."
-              rows={[
-                ["Require ship-to for threshold", CALCULATION_RULES.REQUIRE_SHIP_TO_FOR_THRESHOLD ? "Yes" : "No", "good"],
-                ["Missing ship-to behavior", "Skip and flag", ""],
-                ["Allow negative invoices", CALCULATION_RULES.ALLOW_NEGATIVE_INVOICES ? "With flag" : "Block", "pill"],
-                ["Allow zero invoices", CALCULATION_RULES.ALLOW_ZERO_DOLLAR_INVOICES ? "With flag" : "Block", "pill"],
-              ]}
-              footer={{ label: "Open Review Queue", href: "/review" }}
-            />
-            <SettingsPanel
-              id="exports"
-              icon={FileText}
-              title="Export Rules"
-              description="What can be exported and the required gates."
-              rows={[
-                ["Reviewed export requires approval", "Yes", "good"],
-                ["Reviewed export requires ship-to", CALCULATION_RULES.EXPORT_REQUIRES_SHIP_TO ? "Yes" : "No", "good"],
-                ["Reviewed export requires category", CALCULATION_RULES.EXPORT_REQUIRES_CATEGORY ? "Yes" : "No", "good"],
-                ["Audit log on export", "Yes", "good"],
-              ]}
-              footer={{ label: "Open Exports", href: "/exports" }}
-            />
-            <SettingsPanel
-              id="measurement"
-              icon={SlidersHorizontal}
-              title="Calculation Defaults"
-              description="System-wide constants applied to every invoice."
-              rows={[
-                ["Measurement period", CALCULATION_RULES.MEASUREMENT_PERIOD.replaceAll("_", " "), ""],
-                ["Fiscal year start month", String(CALCULATION_RULES.FISCAL_YEAR_START_MONTH), ""],
-                ["Include US territories", CALCULATION_RULES.INCLUDE_US_TERRITORIES ? "Yes" : "No", "pill"],
-                ["Large invoice threshold", "$50,000", ""],
-              ]}
-              footer={{ label: "Open Rules", href: "/rules" }}
-            />
-            <SettingsPanel
-              id="integrations"
-              icon={Database}
-              title="Data & Integrations"
-              description="Active and planned data sources."
-              rows={[
-                ["Supabase (Primary)", supabase.enabled ? "Connected" : "Not configured", supabase.enabled ? "good" : "pill"],
-                ["QuickBooks Integration", "Future scope", "roadmap"],
-                ["Email Intake Assistant", "Future scope", "roadmap"],
-                ["OCR for scanned PDFs", "Best-effort review only", "pill"],
-              ]}
-              footer={{ label: "Open health check", href: "/api/health", external: true }}
-            />
-            <SettingsPanel
-              id="general"
-              icon={Settings2}
-              title="General"
-              description="App-wide display preferences."
-              rows={[
-                ["Decision support wording", "Enforced", "good"],
-                ["Audit logging", "On", "good"],
-                ["Timezone", "America/Chicago", ""],
-                ["Date format", "MMM d, yyyy", ""],
-                ["Currency", "USD", ""],
-              ]}
-            />
-          </section>
-
+        <div className="min-w-0 space-y-5">
+          <SettingsEditor initialSettings={settings} />
           <LockedRulesTable />
         </div>
 
@@ -259,74 +182,6 @@ function ConnectionCard({ enabled, message }: { enabled: boolean; message: strin
   );
 }
 
-function SettingsPanel({
-  id,
-  icon: Icon,
-  title,
-  description,
-  rows,
-  footer,
-}: {
-  id?: string;
-  icon: typeof ShieldCheck;
-  title: string;
-  description: string;
-  rows: string[][];
-  footer?: { label: string; href: string; external?: boolean };
-}) {
-  return (
-    <section id={id} className="premium-card p-5">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex gap-3">
-          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-indigo-50 text-indigo-600">
-            <Icon className="h-5 w-5" />
-          </span>
-          <div>
-            <h2 className="font-black text-slate-950">{title}</h2>
-            <p className="mt-1 text-xs leading-5 text-slate-500">{description}</p>
-          </div>
-        </div>
-        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold uppercase text-slate-500">Read only</span>
-      </div>
-      <div className="mt-5 space-y-3">
-        {rows.map(([label, value, style]) => (
-          <div key={label} className="flex items-center justify-between gap-4 text-sm">
-            <span className="font-semibold text-slate-700">{label}</span>
-            <SettingValue value={value} style={style} />
-          </div>
-        ))}
-      </div>
-      {footer ? (
-        footer.external ? (
-          <a
-            href={footer.href}
-            target="_blank"
-            rel="noreferrer"
-            className="mt-4 inline-flex items-center gap-1 text-xs font-bold text-blue-700 hover:text-blue-900"
-          >
-            {footer.label} &rarr;
-          </a>
-        ) : (
-          <Link
-            href={footer.href}
-            className="mt-4 inline-flex items-center gap-1 text-xs font-bold text-blue-700 hover:text-blue-900"
-          >
-            {footer.label} &rarr;
-          </Link>
-        )
-      ) : null}
-    </section>
-  );
-}
-
-function SettingValue({ value, style }: { value: string; style?: string }) {
-  if (style === "good") return <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-black text-emerald-700 ring-1 ring-emerald-200">{value}</span>;
-  if (style === "roadmap") return <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-black text-slate-600 ring-1 ring-slate-200">{value}</span>;
-  if (style === "pill") return <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-black text-blue-700 ring-1 ring-blue-200">{value}</span>;
-  if (style === "alert") return <span className="rounded-full bg-red-50 px-2.5 py-1 text-xs font-black text-red-700 ring-1 ring-red-200">{value}</span>;
-  return <span className="text-right font-bold text-slate-700">{value}</span>;
-}
-
 function LockedRulesTable() {
   const rows = [
     ["Nexus Determination", "Defines nexus presence by state based on configured thresholds.", "Active", "Configurable", "Edit per-state threshold and category logic on the Rules page.", "/rules"],
@@ -334,16 +189,16 @@ function LockedRulesTable() {
     ["Shipping & Sourcing", "Ship-to state is primary; ship/bill mismatch raises review flag.", "Active", "Locked", "Built-in. Mismatches surface in the Review Queue.", "/review?tab=missing_fields"],
     [
       "Rounding & Calculations",
-      "Defines rounding and measurement window applied to every invoice.",
+      "Defines rounding applied to every invoice.",
       "Active",
       "Locked",
-      `Rounding: ${CALCULATION_RULES.ROUND_TO_CENTS ? "Cents" : "Raw"} · Measurement: ${CALCULATION_RULES.MEASUREMENT_PERIOD.replaceAll("_", " ")}`,
+      `Rounding: ${CALCULATION_RULES.ROUND_TO_CENTS ? "Cents" : "Raw"}`,
       null,
     ],
   ];
 
   return (
-    <section className="data-grid">
+    <section id="locked-rules" className="data-grid">
       <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 md:flex-row md:items-center md:justify-between">
         <div className="flex items-center gap-3">
           <Lock className="h-5 w-5 text-indigo-600" />
@@ -401,7 +256,6 @@ function EnvironmentPanel({ supabaseEnabled }: { supabaseEnabled: boolean }) {
   const rows = [
     ["Workspace", demoCompany.name],
     ["Data Mode", supabaseEnabled ? "Supabase" : "Local Demo"],
-    ["Measurement Period", "Calendar Year"],
     ["Demo Data", "Enabled"],
   ];
 
@@ -429,7 +283,7 @@ function SystemInfoPanel() {
   ];
 
   return (
-    <section className="premium-card p-5">
+    <section id="integrations" className="premium-card p-5">
       <h2 className="flex items-center gap-2 font-black text-slate-950"><Bell className="h-5 w-5 text-indigo-600" /> System Information</h2>
       <div className="mt-4 divide-y divide-slate-100">
         {rows.map(([label, value]) => (
@@ -446,7 +300,7 @@ function SystemInfoPanel() {
 function QuickActionsPanel() {
   return (
     <section className="premium-card p-5">
-      <h2 className="font-black text-slate-950">Quick Actions</h2>
+      <h2 className="font-black text-slate-950"><SlidersHorizontal className="mr-2 inline h-5 w-5 text-indigo-600" />Quick Actions</h2>
       <p className="mt-1 text-xs text-slate-500">All actions navigate to a real working page.</p>
       <div className="mt-4 grid gap-3">
         <Link href="/rules" className="primary-button justify-center px-3 py-3">
@@ -458,7 +312,7 @@ function QuickActionsPanel() {
           Export Rules Reference
         </Link>
         <Link href="/exports?type=threshold_summary" className="secondary-button justify-center px-3 py-3">
-          <Download className="h-4 w-4" />
+          <FileText className="h-4 w-4" />
           Export Threshold Summary
         </Link>
         <a

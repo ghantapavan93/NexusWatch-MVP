@@ -138,7 +138,7 @@ export function RulesWorkbench({ rules }: { rules: NexusRule[] }) {
   }
 
   return (
-    <>
+    <div className="min-w-0">
       <Toast message={toastMessage} onClose={() => setToastMessage("")} />
       <div className="mb-5 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-5 py-3 shadow-sm">
         <div className="text-sm text-slate-600">
@@ -248,6 +248,6 @@ export function RulesWorkbench({ rules }: { rules: NexusRule[] }) {
         onUpdateDraft={updateDraft}
         onSaveDraft={(code) => void saveOne(code)}
       />
-    </>
+    </div>
   );
 }
